@@ -1,7 +1,7 @@
 # 문서 지도
 
 - `product/`: 서비스 범위와 수용 기준 요약
-- `architecture/`: 확정된 레포 구조와 백엔드·AI의 저장소 경계
+- `architecture/`: 확정된 저장소 구조와 백엔드·AI의 책임 경계
 - `harness/`: 하네스의 역할·구조·현재 검사 범위와 확장 기준. 최신 문서는 [`harness-v1.3.md`](harness/harness-v1.3.md)
 - `harness/harness-file-roadmap.md`: 작업별 하네스 검사 추가 조건과 완료 기준
 - `decisions/`: 확정 결정과 재검토 조건

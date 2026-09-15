@@ -2,7 +2,7 @@
 
 - 상태: 결정
 - 소유 역할: `project-team`
-- 결정: 멀티레포를 사용하되 제품 코드는 프론트엔드와 백엔드로만 분리한다.
+- 결정: 멀티레포를 사용하되 제품 코드는 프론트엔드와 서버로만 분리한다.
 - 저장소 구성: `sw-capstone/bareum-web`, `sw-capstone/bareum-server`
 - AI 위치: `bareum-server`에서 관리한다. 구현 모듈과 실행 단위는 추후 확정하며, AI를 별도 저장소로 분리하지 않는다.
 - 계약·하네스: 공통 계약은 형식이 확정되면 `bareum-server/packages/contracts`에 추가하고, 하네스 구현은 `bareum-server/harness`에서 관리한다. 평가 자산의 위치는 평가 범위와 형식이 확정된 뒤 결정한다.
