@@ -10,5 +10,3 @@ dist/
 build/
 harness/reports/*
 !harness/reports/.gitkeep
-evals/reports/*
-!evals/reports/README.md

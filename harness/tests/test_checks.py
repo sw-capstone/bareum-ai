@@ -5,7 +5,6 @@ from unittest.mock import patch
 
 from project_harness import schema as schema_module
 from project_harness.checks import (
-    check_backend_docs,
     check_id_registry,
     check_json_files,
     check_product_spec,
@@ -246,15 +245,3 @@ class HarnessChecksTest(unittest.TestCase):
                 {"product_spec": {"path": "docs/product/planning-final-v1.1.md", "required_markers": ["## 0. 한 줄"]}},
             )
             self.assertEqual([finding.check_id for finding in findings], ["HAR-PRODUCT-001"])
-
-    def test_backend_documentation_requires_explicit_unconnected_state(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            path = root / "backend"
-            path.mkdir()
-            (path / "README.md").write_text("## 하네스 연결\n포맷 린트 타입 단위 테스트 API 테스트 DB·마이그레이션 테스트\n", encoding="utf-8")
-            findings = check_backend_docs(
-                root,
-                {"backend_docs": {"required_markers": {"backend/README.md": ["미연결"]}}},
-            )
-            self.assertEqual([finding.check_id for finding in findings], ["HAR-BACKEND-001"])

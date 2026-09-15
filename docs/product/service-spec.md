@@ -4,7 +4,7 @@
 기획 기준본: [`planning-final-v1.1.md`](planning-final-v1.1.md)  
 관리 경로: `docs/product/service-spec.md`  
 최종 반영일: 2026-09-10  
-하네스 기준: [`docs/harness/harness-v1.2.md`](../harness/harness-v1.2.md)
+하네스 기준: [`docs/harness/harness-v1.3.md`](../harness/harness-v1.3.md)
 
 이 파일은 계약·테스트 연결을 위한 요약본이며 기획 문서 전체를 대체하지 않는다. 문서의 미결 항목은 구현에서 임의로 확정하지 않는다.
 

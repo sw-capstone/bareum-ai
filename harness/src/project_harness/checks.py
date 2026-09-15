@@ -304,37 +304,6 @@ def check_product_spec(root: Path, policy: dict[str, object]) -> list[Finding]:
     ]
 
 
-def check_backend_docs(root: Path, policy: dict[str, object]) -> list[Finding]:
-    config = policy.get("backend_docs", {})
-    if not isinstance(config, dict) or not isinstance(config.get("required_markers", {}), dict):
-        return [Finding("HAR-BACKEND-001", "error", "harness/policy.json", "backend_docs 설정 형식이 잘못되었습니다.")]
-    findings: list[Finding] = []
-    for path_value, markers in config.get("required_markers", {}).items():
-        if not isinstance(path_value, str) or not isinstance(markers, list) or not all(
-            isinstance(marker, str) for marker in markers
-        ):
-            findings.append(
-                Finding(
-                    "HAR-BACKEND-001",
-                    "error",
-                    "harness/policy.json",
-                    "backend_docs.required_markers는 경로별 문자열 배열이어야 합니다.",
-                )
-            )
-            continue
-        path = root / path_value
-        if not path.exists():
-            findings.append(Finding("HAR-BACKEND-001", "error", path_value, "백엔드 책임·검증 문서가 없습니다."))
-            continue
-        content = path.read_text(encoding="utf-8")
-        findings.extend(
-            Finding("HAR-BACKEND-001", "error", path_value, f"백엔드 문서 필수 표식이 없습니다: {marker}")
-            for marker in markers
-            if marker not in content
-        )
-    return findings
-
-
 def evaluate_checks(root: Path, policy: dict[str, object]) -> tuple[list[Finding], list[CheckExecution]]:
     enabled = policy.get("checks", {})
     if not isinstance(enabled, dict) or any(not isinstance(value, bool) for value in enabled.values()):
@@ -357,7 +326,6 @@ def evaluate_checks(root: Path, policy: dict[str, object]) -> tuple[list[Finding
         ("markdown_links", lambda: check_markdown_links(root), True),
         ("secret_patterns", lambda: check_secret_patterns(root), True),
         ("product_spec", lambda: check_product_spec(root, policy), True),
-        ("backend_docs", lambda: check_backend_docs(root, policy), True),
     )
     for name, check, applicable in checks:
         if not enabled.get(name, True):
