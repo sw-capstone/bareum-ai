@@ -78,9 +78,11 @@ npm run check
 ```bash
 git status --short
 git add <변경한 파일>
-git commit -m "<변경 목적이 드러나는 메시지>"
+git commit -m "<태그>: <변경 목적이 드러나는 메시지>"
 git push -u origin <현재-브랜치>
 ```
+
+커밋 메시지는 `chore: 하네스 구조 정리`, `docs: 가이드 수정`, `fix: 검사 오류 수정`처럼 작성한다. 이슈·PR 제목의 `[Chore]` 형식과 커밋 메시지 형식은 별개다.
 
 PR을 열기 전에 확인한다.
 

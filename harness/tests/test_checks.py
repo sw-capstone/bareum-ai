@@ -234,14 +234,14 @@ class HarnessChecksTest(unittest.TestCase):
             findings = check_id_registry(root)
             self.assertIn("HAR-ID-005", [finding.check_id for finding in findings])
 
-    def test_github_managed_product_spec_requires_markers(self) -> None:
+    def test_server_product_summary_requires_markers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             path = root / "docs/product"
             path.mkdir(parents=True)
-            (path / "planning-final-v1.1.md").write_text("문서 상태: GitHub 관리 기준본\n", encoding="utf-8")
+            (path / "service-spec.md").write_text("# 서비스 명세 구현 요약\n", encoding="utf-8")
             findings = check_product_spec(
                 root,
-                {"product_spec": {"path": "docs/product/planning-final-v1.1.md", "required_markers": ["## 0. 한 줄"]}},
+                {"product_spec": {"path": "docs/product/service-spec.md", "required_markers": ["## 1차 범위"]}},
             )
             self.assertEqual([finding.check_id for finding in findings], ["HAR-PRODUCT-001"])

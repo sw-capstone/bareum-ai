@@ -32,7 +32,7 @@ scripts/        로컬과 CI의 공통 실행 진입점
 
 ### 하네스 검증
 
-하네스는 백엔드·AI 구현을 대신하는 기능이 아니다. 현재는 필수 경로·JSON·문서 링크·비밀정보 패턴·기획 문서 표식을 검사한다. Schema·ID 검사는 코드가 있지만 대상이 없어 `not_applicable`이며, 계약 호환성·근거·AI 안전성·성능 회귀는 관련 구현 후 연결한다. 적용 범위와 확장 기준은 [`docs/guide/development-guide.md`](docs/guide/development-guide.md), 구조 설계는 [`docs/harness/harness-v1.3.md`](docs/harness/harness-v1.3.md)에서 확인한다.
+하네스는 백엔드·AI 구현을 대신하는 기능이 아니다. 현재는 필수 경로·JSON·문서 링크·비밀정보 패턴·서버 구현 요약 문서의 필수 표식을 검사한다. Schema·ID 검사는 코드가 있지만 대상이 없어 `not_applicable`이며, 계약 호환성·근거·AI 안전성·성능 회귀는 관련 구현 후 연결한다. 적용 범위와 확장 기준은 [`docs/guide/development-guide.md`](docs/guide/development-guide.md), 구조 설계는 [`docs/harness/harness-v1.3.md`](docs/harness/harness-v1.3.md)에서 확인한다.
 
 ```bash
 ./scripts/run-harness.sh check

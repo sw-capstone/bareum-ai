@@ -42,15 +42,12 @@
     "product_spec": true
   },
   "product_spec": {
-    "path": "docs/product/planning-final-v1.1.md",
+    "path": "docs/product/service-spec.md",
     "required_markers": [
-      "문서 상태: GitHub 관리 기준본",
-      "문서 버전: `v1.1`",
-      "## 0. 한 줄",
-      "## 4. 어떻게 동작하는가",
-      "## 5. 기능 12개",
-      "## 8. 얼마나 잘해야 하는가",
-      "## 9. 실험 세 개"
+      "## 1차 범위",
+      "## 확정된 경계",
+      "## 상세 조건",
+      "## 결정 대기"
     ]
   },
   "schema_examples": {},

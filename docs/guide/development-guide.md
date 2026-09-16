@@ -78,12 +78,12 @@ bareum-server/README.md
 
 | 작업 범위 | 추가로 확인할 문서 |
 | --- | --- |
-| 제품 기능·정책 변경 | `docs/product/planning-final-v1.1.md`, `docs/product/service-spec.md` |
+| 제품 기능·정책 변경 | Notion 기획 원문, `docs/product/service-spec.md` |
 | 백엔드·AI 책임·실행 경계 변경 | `docs/architecture/repository-structure.md`, `docs/architecture/repository-boundaries.md`와 관련 결정 문서 |
 | AI 규칙·프롬프트·평가 기준 변경 | 승인된 원천과 관련 결정 문서 |
 | 웹과 서버의 책임·계약·경계 변경 | `docs/architecture/repository-structure.md`, `docs/architecture/repository-boundaries.md`와 관련 결정 문서 |
 | 하네스 검사·정책·CI 변경 | `docs/harness/harness-v1.3.md`, `docs/harness/harness-file-roadmap.md` |
-| 이슈·브랜치·PR·리뷰·병합 방식 변경 | 이 개발 가이드 |
+| 이슈·브랜치·PR·리뷰·병합 방식 변경 | `docs/guide/development-guide.md` |
 | 공식 ID·제품 규칙 변경 | 해당하는 `docs/decisions/DEC-*.md`만 확인 |
 
 `docs/architecture/`와 `docs/decisions/` 전체를 매번 읽지 않는다. 변경 파일과 직접 연결된 문서가 없으면 기본 문서만 확인하고 작업한다.
@@ -311,8 +311,8 @@ cd bareum-server
   - 문서의 로컬 파일 링크가 깨지지 않았는지 확인한다.
 - 비밀정보 패턴 — 실행 중
   - 파일에 토큰·비밀번호 등으로 보이는 문자열이 있는지 패턴으로 확인한다. 모든 비밀정보를 완벽하게 탐지한다는 의미는 아니다.
-- 기획 문서 기준 — 실행 중
-  - 기획 문서에 정책이 요구하는 표식이 있는지 확인한다. 기획 내용의 정확성은 판정하지 않는다.
+- 제품 구현 요약 문서 기준 — 실행 중
+  - `docs/product/service-spec.md`에 정책이 요구하는 구성이 있는지 확인한다. 문서 내용의 정확성은 판정하지 않는다.
 백엔드·AI 동작, 계약 호환성, 근거·상태 보존 등 안전 불변식, 평가 데이터·성능 회귀 검사는 관련 구현과 자산이 준비된 뒤 추가한다. 현재 확정되지 않은 백엔드·AI 경로를 대상으로 하는 검사는 없다.
 
 `test-harness.sh`는 현재 하네스 검사기의 자체 회귀 테스트를 실행한다. 제품 코드와 영역별 테스트 명령은 기술 스택과 코드 경로가 확정될 때 별도로 연결한다.
@@ -361,7 +361,7 @@ HAR-SCHEMA-001  Schema
 HAR-ID-*         ID
 HAR-DOC-*        문서 링크
 HAR-SEC-001      비밀정보
-HAR-PRODUCT-001  기획 문서
+HAR-PRODUCT-001  제품 구현 요약 문서
 ```
 
 검사 실패를 숨기거나 검사 파일을 제외하지 않는다. 리포트 파일을 삭제해서 통과시키지 않는다.
@@ -384,13 +384,13 @@ git add src/hooks/useDocumentUpload.test.ts
 git diff --staged
 ```
 
-변경 목적을 알아볼 수 있는 커밋 메시지를 작성한다.
+변경 목적을 알아볼 수 있는 커밋 메시지를 `태그: 커밋 본문` 형식으로 작성한다. 이슈·PR 제목의 `[Chore]` 형식과 커밋 메시지 형식은 별개다.
 
 ```bash
-git commit -m "문서 업로드 입력 검증 추가"
+git commit -m "feat: 문서 업로드 입력 검증 추가"
 ```
 
-한 커밋에는 하나의 논리적 변경만 담는다. `수정`, `완료`, `update`처럼 목적이 드러나지 않는 메시지는 피한다. 작업 브랜치를 Squash merge하면 PR 제목이 최종 커밋 메시지로 남으므로 병합 전에 PR 제목을 다시 확인한다.
+한 커밋에는 하나의 논리적 변경만 담는다. `수정`, `완료`, `update`처럼 목적이 드러나지 않는 메시지는 피한다. 예시는 `feat: 기능 추가`, `fix: 오류 수정`, `docs: 문서 수정`, `chore: 환경·구조 정리`와 같다.
 
 ## 10. 푸시
 

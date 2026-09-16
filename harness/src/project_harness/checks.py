@@ -285,7 +285,7 @@ def check_product_spec(root: Path, policy: dict[str, object]) -> list[Finding]:
         return [Finding("HAR-PRODUCT-001", "error", "harness/policy.json", "product_spec.path는 문자열이어야 합니다.")]
     path = root / path_value
     if not path.exists():
-        return [Finding("HAR-PRODUCT-001", "error", str(path_value), "GitHub 관리 기획 문서가 없습니다.")]
+        return [Finding("HAR-PRODUCT-001", "error", str(path_value), "서버 구현 요약 문서가 없습니다.")]
     content = path.read_text(encoding="utf-8")
     required_markers = config.get("required_markers", [])
     if not isinstance(required_markers, list) or not all(isinstance(marker, str) for marker in required_markers):
@@ -298,7 +298,7 @@ def check_product_spec(root: Path, policy: dict[str, object]) -> list[Finding]:
             )
         ]
     return [
-        Finding("HAR-PRODUCT-001", "error", str(path_value), f"기획 문서 필수 표식이 없습니다: {marker}")
+        Finding("HAR-PRODUCT-001", "error", str(path_value), f"구현 요약 문서 필수 표식이 없습니다: {marker}")
         for marker in required_markers
         if marker not in content
     ]
