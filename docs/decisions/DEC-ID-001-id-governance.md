@@ -3,7 +3,7 @@
 - 상태: 결정
 - 결정일: 2026-09-08
 - 소유 역할: `harness-maintainers`
-- 기준 파일: `packages/contracts/id-registry.json`
+- 기준 파일(생성 예정): `packages/contracts/id-registry.json`
 
 ## 목적
 
@@ -30,7 +30,7 @@ GitHub 이슈 번호는 작업을 추적하고, 프로젝트 ID는 여러 파일
 | `EVAL` | 평가셋·평가 설정·기준 결과 | `EVAL-REG-001` |
 | `TEST` | 핵심 통합·불변식 테스트 | `TEST-FLOW-001` |
 | `HAR` | 하네스 검사·정책 | `HAR-CI-001` |
-| `DEC` | 아키텍처·운영 결정 | `DEC-GIT-001` |
+| `DEC` | 아키텍처·운영 결정 | `DEC-REPO-001` |
 
 ### 도메인
 
@@ -71,7 +71,7 @@ GitHub 이슈 번호는 작업을 추적하고, 프로젝트 ID는 여러 파일
 
 - 브랜치: GitHub 이슈 번호 사용
 - 이슈: 관련 ID 또는 신규 ID 요청 표시
-- PR 제목: `DEC-GIT-001`의 `[Type] 변경 내용` 형식 사용
+- PR 제목: 변경 목적이 드러나도록 작성하고 병합 전에 확인
 - PR 본문: `Closes #42`와 관련 공식 ID 기록
 - 계약·규칙·평가 파일: 해당 항목의 ID 필드 사용
 - 테스트: `verified_by` 또는 테스트 메타데이터로 연결

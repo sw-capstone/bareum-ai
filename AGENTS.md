@@ -13,17 +13,16 @@
 
 ## 경계
 
-- `bareum-web`은 이 레포의 공개 API 계약만 소비한다.
-- `apps/api`는 세션·작업·영속성·분석 오케스트레이션과 공개 API를 담당한다.
-- `apps/ai_worker`는 파싱·규칙·검색·판정·수정안 파이프라인을 담당한다.
-- 영역 간 형식은 `packages/contracts/`에 정의한다.
+- `bareum-web`은 이 저장소의 공개 API 계약만 소비한다.
+- 백엔드·AI 실행 경로와 모듈 경계는 관련 아키텍처가 확정된 뒤 생성한다. 미확정 경로를 미리 만들지 않는다.
+- 영역 간 형식이 확정되면 `packages/contracts/`를 생성해 정의한다.
 - 규칙, 프롬프트, 선택 가능한 기준 데이터, 평가 결과는 서로 분리해 버전 추적한다.
 - 근거가 없거나 검증을 통과하지 못한 결과는 확정 판정으로 노출하지 않는다.
 
 ## GitHub와 ID
 
-- GitHub 브랜치·커밋·PR·리뷰·병합은 `docs/decisions/DEC-GIT-001-github-flow.md`를 따른다.
+- GitHub 작업은 개발 가이드를 따른다.
 - 공식 자산 ID 정책은 `docs/decisions/DEC-ID-001-id-governance.md`를 따른다.
 - 하네스 검사와 정책은 `HAR-*` ID로 추적한다.
 
-이 레포는 `bareum-server`의 기준 루트다. 프론트엔드 구현을 이 레포에 추가하지 않는다. 계약이 확정되면 `bareum-web` 소비자 검증과 함께 변경한다.
+이 저장소는 `bareum-server`의 기준 루트다. 프론트엔드 구현을 이 저장소에 추가하지 않는다. 계약이 확정되면 `bareum-web` 소비자 검증과 함께 변경한다.

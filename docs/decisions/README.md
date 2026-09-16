@@ -7,6 +7,5 @@
 | ID | 상태 | 내용 |
 |---|---|---|
 | [`DEC-REPO-001`](DEC-REPO-001-repository-strategy.md) | 결정 | 프론트엔드·백엔드 중심 멀티레포 구성 방식 |
-| [`DEC-GIT-001`](DEC-GIT-001-github-flow.md) | 결정 | Git Flow·브랜치·PR·CI·Squash Merge 규칙 |
 | [`DEC-ID-001`](DEC-ID-001-id-governance.md) | 결정 | 프로젝트 ID 형식·발급·상태·연결 규칙 |
 | [`DEC-RULE-001`](DEC-RULE-001-rule-catalog-authority.md) | 검토 필요 | 최신 규칙 카탈로그를 제품 규칙 공식 원천으로 지정하는 안 |
