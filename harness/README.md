@@ -1,14 +1,22 @@
-# 하네스
+# AI 저장소 하네스
 
-최신 구조 문서는 [`docs/harness/harness-v1.3.md`](../docs/harness/harness-v1.3.md)이다.
+`bareum-server-ai` 내부의 구조와 문서 기본 품질을 검사한다.
 
-처음 사용하는 팀원은 [전체 개발·하네스 가이드](../docs/guide/development-guide.md)를 먼저 읽는다.
+```bash
+./scripts/run-harness.sh check
+./scripts/test-harness.sh
+```
 
-하네스는 두 역할로 나뉜다.
+현재 검사 항목은 다음과 같다.
 
-- 개발 과정 하네스는 Issue·계약·ID·정적 검사·CI·PR 증거를 연결한다.
-- 향후 제품 AI 하네스는 관련 기능이 구현된 범위부터 입력·파싱·규칙·검색·판정·근거·출력·평가 검증을 연결한다.
+- 필수 경로 존재 여부
+- JSON 문법
+- Markdown 내부 링크
+- 비밀정보 의심 패턴
 
-`policy.json`은 저장소의 필수 경로와 활성 검사를 정의한다. 현재 검사기는 구조, JSON 문법, Markdown 로컬 링크, 비밀정보 패턴과 서버 구현 요약 문서의 필수 표식을 검사하고 JSON 리포트를 생성한다. Schema 헤더·예시와 ID 레지스트리 검사는 코드가 있지만 대상이 없어 `not_applicable`이다. 문서 표식 통과는 기능 동작 검증을 뜻하지 않는다.
+검사 결과는 `harness/reports/report.json`에 생성되고 Git에는 저장하지 않는다. GitHub Actions는 Push와 Pull Request에서 같은 명령을 실행하고 결과 파일을 `harness-report` 아티팩트로 제공한다.
 
-제품 품질 평가, 계약 인스턴스 검증, 영역별 빌드·린트·타입 검사는 관련 기능과 기술 스택이 추가될 때 실패 사례와 수용 기준을 근거로 연결한다. RMA·RAG·LLM·CBR의 구체 책임과 검사도 해당 기능이 확정되고 구현될 때 추가한다.
+제품 AI 코드·계약·평가 기준이 추가되면 해당 담당자가 검사를 작성하고 하네스 담당자의 리뷰를 받아 확장한다.
+
+- [하네스 설계 v1.4](../docs/harness/harness-v1.4.md)
+- [확장 로드맵](../docs/harness/harness-file-roadmap.md)
