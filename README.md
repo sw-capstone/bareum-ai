@@ -1,4 +1,4 @@
-# bareum-server-ai — AI 처리 저장소
+# bareum-ai — AI 처리 저장소
 
 문서 처리와 AI 기능, 관련 테스트와 평가를 관리하는 저장소다. 공개 API는 `bareum-server`, 화면은 `bareum-web`에서 관리한다.
 

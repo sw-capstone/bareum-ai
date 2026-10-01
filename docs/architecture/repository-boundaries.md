@@ -6,7 +6,7 @@
 | --- | --- |
 | `bareum-web` | 화면과 서버 공개 API 소비 |
 | `bareum-server` | 백엔드 공개 API, 서버 상태와 공유 계약 |
-| `bareum-server-ai` | AI 처리 코드, AI 전용 테스트와 평가 |
+| `bareum-ai` | AI 처리 코드, AI 전용 테스트와 평가 |
 
 웹은 AI 저장소를 직접 호출하지 않는다. 서버가 AI 처리를 호출하고 공개 API 형태로 웹에 결과를 제공한다.
 

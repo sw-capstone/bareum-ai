@@ -1,6 +1,6 @@
 # AI 저장소 하네스
 
-`bareum-server-ai` 내부의 구조와 문서 기본 품질을 검사한다.
+`bareum-ai` 내부의 구조와 문서 기본 품질을 검사한다.
 
 ```bash
 ./scripts/run-harness.sh check

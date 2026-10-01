@@ -3,7 +3,7 @@
 현재 관리 대상은 다음과 같다.
 
 ```text
-bareum-server-ai/
+bareum-ai/
 ├── .github/                 # 협업 템플릿과 하네스 CI
 ├── docs/
 │   ├── architecture/        # 저장소 구조와 책임 경계
