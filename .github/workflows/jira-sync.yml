@@ -1,0 +1,15 @@
+name: Jira sync
+
+on:
+  issues:
+    types: [opened, edited, assigned, unassigned, labeled, unlabeled, closed, reopened]
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize, closed, ready_for_review, converted_to_draft]
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    uses: sw-capstone/bareum-ops/.github/workflows/jira-sync.yml@main
+    secrets: inherit
