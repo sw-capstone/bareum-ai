@@ -15,7 +15,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: python -m pip install -r harness/requirements.txt
       - run: ./scripts/run-harness.sh check
       - run: ./scripts/test-harness.sh
       - if: always()
