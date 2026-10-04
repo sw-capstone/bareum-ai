@@ -10,3 +10,4 @@ dist/
 build/
 harness/reports/*
 !harness/reports/.gitkeep
+parsed_output/

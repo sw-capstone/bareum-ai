@@ -10,9 +10,16 @@ dependencies = [
 ]
 
 [dependency-groups]
+dataset = [
+    "pymupdf==1.28.2",
+]
 dev = [
     "pytest>=8",
 ]
+
+[tool.uv]
+# 로컬 개발·CI에서는 데이터셋 도구까지 설치한다. 서비스 실행 환경은 --no-default-groups로 제외할 수 있다.
+default-groups = ["dev", "dataset"]
 
 [build-system]
 requires = ["hatchling"]
@@ -23,3 +30,7 @@ packages = ["src/bareum_ai"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    # PyMuPDF(SWIG) 내부 경고. Python 3.14에서 발생하며 파서 동작과 무관하다.
+    "ignore:builtin type (SwigPyPacked|SwigPyObject|swigvarlink) has no __module__ attribute:DeprecationWarning",
+]

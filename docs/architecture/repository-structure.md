@@ -15,6 +15,10 @@ bareum-ai/
 │   └── reports/             # 실행 결과(Git 제외)
 ├── scripts/                 # 로컬·CI 검사 진입점
 ├── src/bareum_ai/           # AI 실행 코드
+│   └── dataset/             # 데이터셋 구축 도구
+│       └── parsing/         # 데이터셋 구축용 PDF 파서
+├── tests/                   # AI 실행 코드 테스트 (pytest)
+│   └── dataset/parsing/
 ├── .python-version          # 로컬 Python 버전 (3.14)
 ├── pyproject.toml           # 의존성·프로젝트 설정 (uv)
 ├── uv.lock                  # 의존성 잠금 파일

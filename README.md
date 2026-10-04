@@ -11,6 +11,9 @@ AI 실행 코드 경로와 Python 개발 환경, 저장소 운영에 필요한 �
 - `harness/`: 저장소 정적 검사와 검사기 자체 테스트
 - `scripts/`: 로컬과 CI의 공통 검사 명령
 - `src/bareum_ai/`: AI 실행 코드 (Python 3.14)
+  - `dataset/`: 데이터셋 구축 도구
+    - `parsing/`: 데이터셋 구축용 PDF 보고서 파서
+- `tests/`: AI 실행 코드 테스트
 - `pyproject.toml`, `uv.lock`: 의존성과 프로젝트 설정 (uv로 관리)
 
 확정되지 않은 모델·프롬프트·데이터·평가 디렉터리는 미리 만들지 않는다. 실제 구현과 기준이 결정되면 해당 변경과 함께 구조와 검사를 추가한다.
@@ -25,12 +28,33 @@ uv sync   # 가상환경 생성·의존성 설치
 
 의존성은 `uv add <패키지>`(개발용은 `uv add --dev <패키지>`)로 추가하고 `uv.lock`을 함께 커밋한다.
 
+## 데이터셋 구축용 PDF 파서
+
+`src/bareum_ai/dataset/parsing/`은 평가 데이터셋 구축에 사용하는 PyMuPDF 기반 규칙형 파서다. 서비스의 문서 입력 처리용이 아니다. 보고서 PDF에서 글자·좌표·표·도식을 추출해 문단·항목·표 구조와 원본 위치 정보를 만든다. 파싱 과정에서 LLM을 호출하지 않으며, 오류 판정과 의미 태깅은 범위에 포함하지 않는다.
+
+```bash
+uv run python -m bareum_ai.dataset.parsing.parser <PDF 파일 또는 폴더> -o <출력 폴더>
+```
+
+출력 폴더를 생략하면 현재 위치의 `parsed_output/`(Git 제외)에 저장한다. PDF마다 다음 파일을 만든다.
+
+| 파일 | 용도 |
+| --- | --- |
+| `.json` | 프로그램 입력용 구조화 결과 (`schema_version` 포함) |
+| `.md` | 사람이 읽는 출력 |
+| `.raw.txt` | 추출 원문 비교용 |
+
+PyMuPDF는 `dataset` 의존성 그룹으로 관리한다. 텍스트 PDF가 대상이며 OCR, 그래프 의미 해석, 모든 표·서식의 범용 복원은 보장하지 않는다. 읽기 어려운 영역은 결과에 경고로 기록한다.
+
 ## 현재 검사
 
 ```bash
 ./scripts/run-harness.sh check
 ./scripts/test-harness.sh
+./scripts/test-app.sh          # AI 실행 코드 테스트 (pytest)
 ```
+
+원본 PDF가 필요한 파서 테스트는 기본으로 건너뛴다. 로컬 원본이 있으면 `BAREUM_PARSER_CORPUS=<원본 폴더> ./scripts/test-app.sh`로 함께 실행한다.
 
 현재 하네스는 필수 경로, JSON 문법, Markdown 내부 링크와 비밀정보 의심 패턴을 검사한다. 비밀정보 검사는 설정·소스·문서에서 `API_KEY`, `CLIENT_SECRET`, `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD` 대입값(8자 이상)과 `sk-` 뒤 20자 이상 토큰 패턴을 찾고, `replace-me`, `example` 같은 예시값은 제외한다. 모든 비밀정보를 찾아내는 검사는 아니다. AI 결과의 정확성·성능과 서버 연동은 아직 검사하지 않는다.
 
