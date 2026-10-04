@@ -1,41 +1,27 @@
-# 저장소 구조와 실행 경계
+# AI 저장소 구조
 
-## 현재 저장소 결정
-
-제품 코드는 멀티레포로 운영한다.
-
-| 저장소 | 책임 |
-| --- | --- |
-| `sw-capstone/bareum-web` | 화면과 공개 API 계약 소비 |
-| `sw-capstone/bareum-server` | 백엔드 API, AI 파이프라인, 공유 계약, 평가와 하네스 |
-
-백엔드와 AI를 별도 Git 저장소로 나누지 않는다. 다만 같은 저장소에 있다고 해서 같은 프로세스나 컨테이너에서 실행해야 하는 것은 아니다.
-
-## 현재 서버 저장소 구조
+현재 관리 대상은 다음과 같다.
 
 ```text
-bareum-server/
-├── .github/                 # 이슈·PR 템플릿과 하네스 CI
+bareum-ai/
+├── .github/                 # 협업 템플릿과 하네스 CI
 ├── docs/
-│   └── architecture/
-│       ├── repository-boundaries.md
-│       └── repository-structure.md
+│   ├── architecture/        # 저장소 구조와 책임 경계
+│   ├── guide/               # AI 작업 안내
+│   └── harness/             # 하네스 설계와 확장 기준
 ├── harness/
-├── scripts/
-├── src/bareum_ai/           # AI 처리 코드 (Python 3.14, FastAPI)
-├── pyproject.toml           # 의존성·빌드 설정 (uv로 관리)
-└── uv.lock
+│   ├── src/project_harness/ # 저장소 정적 검사기와 CLI
+│   ├── tests/               # 검사기 자체 테스트
+│   └── reports/             # 실행 결과(Git 제외)
+├── scripts/                 # 로컬·CI 검사 진입점
+├── src/bareum_ai/           # AI 실행 코드
+├── .python-version          # 로컬 Python 버전 (3.14)
+├── pyproject.toml           # 의존성·프로젝트 설정 (uv)
+├── uv.lock                  # 의존성 잠금 파일
+├── AGENTS.md                # 저장소 작업 지침
+└── README.md                # 저장소 개요
 ```
 
-AI 처리 코드는 `src/bareum_ai/` 아래에 모듈(처리 단계) 단위로 추가하고, 테스트는 `tests/`에서 같은 구조를 따른다. 작업(이슈) 단위로 폴더를 만들지 않으며, 아직 구현하지 않는 모듈의 빈 디렉터리를 미리 만들지 않는다.
+AI 실행 코드는 `src/bareum_ai/` 아래에 모듈(처리 단계) 단위로 추가하고, 테스트는 루트 `tests/`에서 같은 구조를 따른다. 작업(이슈) 단위로 폴더를 만들지 않으며, 아직 구현하지 않는 모듈의 빈 디렉터리를 미리 만들지 않는다.
 
-백엔드와 AI는 `bareum-server`에서 관리한다는 저장소 경계만 확정되어 있다. 백엔드·AI 실행 코드의 경로와 실행·배포 단위는 아직 정하지 않았으므로 현재 구조에 해당 디렉터리나 하위 아키텍처 문서를 미리 만들지 않는다. API와 AI를 하나의 서버 저장소에서 관리한다는 결정만으로 코드 경로나 프로세스 운영이 확정되는 것은 아니다.
-
-## 현재 구조의 적용 범위
-
-이 문서는 확정된 저장소 분리와 현재 관리 대상 디렉터리만 정의한다. 백엔드·AI 실행 코드, 공유 계약, 인프라·배포 설정은 각 결정이 완료된 뒤 해당 구현과 함께 추가한다. 하네스는 결정되지 않은 경로를 검사 기준으로 사용하지 않는다.
-
-## 관련 문서
-
-- [`repository-boundaries.md`](repository-boundaries.md)
-- [`DEC-REPO-001`](../decisions/DEC-REPO-001-repository-strategy.md)
+프롬프트, 규칙, 데이터와 평가 자산의 경로는 아직 이 문서에서 정하지 않는다. 실제 작업의 기술 선택과 소유 범위가 확정되면 구현·테스트·검사를 함께 추가한다.

@@ -1,5 +1,5 @@
 {
-  "version": "1.3.0",
+  "version": "1.4.0",
   "required_paths": [
     "README.md",
     ".gitignore",
@@ -7,17 +7,15 @@
     "harness/README.md",
     "harness/AGENTS.md",
     "harness/policy.json",
-    "docs/harness/harness-v1.3.md",
+    "docs/harness/harness-v1.4.md",
     "docs/harness/harness-file-roadmap.md",
     "docs/README.md",
     "docs/architecture/README.md",
     "docs/architecture/repository-boundaries.md",
     "docs/architecture/repository-structure.md",
     ".github/workflows/harness.yml",
-    "harness/requirements.txt",
     "harness/src/project_harness/checks.py",
     "harness/src/project_harness/cli.py",
-    "harness/src/project_harness/schema.py",
     "harness/src/project_harness/__init__.py",
     "harness/tests/test_checks.py",
     "scripts/run-harness.sh",
@@ -37,22 +35,8 @@
   "checks": {
     "required_paths": true,
     "json_syntax": true,
-    "schema_headers": true,
-    "schema_examples": true,
-    "id_registry": true,
     "markdown_links": true,
-    "secret_patterns": true,
-    "product_spec": true
+    "secret_patterns": true
   },
-  "product_spec": {
-    "path": "docs/product/service-spec.md",
-    "required_markers": [
-      "## 1차 범위",
-      "## 확정된 경계",
-      "## 상세 조건",
-      "## 결정 대기"
-    ]
-  },
-  "schema_examples": {},
   "autofix": {"enabled": false, "semantic_changes": false}
 }

@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .checks import CheckExecution, Finding, evaluate_checks
+from .checks import CHECK_NAMES, CheckExecution, Finding, evaluate_checks
 
 
 def load_policy(root: Path) -> tuple[dict[str, object] | None, Finding | None]:
@@ -26,6 +26,12 @@ def load_policy(root: Path) -> tuple[dict[str, object] | None, Finding | None]:
             "error",
             "harness/policy.json",
             "정책은 version 문자열과 true 또는 false 검사 설정을 가진 JSON 객체여야 합니다.",
+        )
+    unknown = set(checks) - CHECK_NAMES
+    if unknown:
+        return None, Finding(
+            "HAR-POLICY-001", "error", "harness/policy.json",
+            f"알 수 없는 검사 이름: {', '.join(sorted(unknown))}",
         )
     return policy, None
 
