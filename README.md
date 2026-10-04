@@ -17,6 +17,7 @@
 docs/           기획·아키텍처·결정·개발·하네스 문서
 harness/        하네스 정책·검사기·자체 테스트
 scripts/        로컬과 CI의 공통 실행 진입점
+src/bareum_ai/  AI 처리 코드 (Python 3.14, FastAPI)
 ```
 
 `packages/contracts/`는 공유 계약이 확정되면 추가할 위치이며, 현재 구조에는 포함되지 않는다. 백엔드·AI 실행 코드와 기준 데이터·평가 자산의 경로도 관련 결정 후 정한다.
@@ -38,3 +39,13 @@ scripts/        로컬과 CI의 공통 실행 진입점
 ./scripts/run-harness.sh check
 ./scripts/test-harness.sh
 ```
+
+### AI 처리 코드 환경
+
+[uv](https://docs.astral.sh/uv/)로 Python 3.14와 의존성을 관리한다.
+
+```bash
+uv sync   # 가상환경 생성·의존성 설치
+```
+
+의존성은 `uv add <패키지>`(개발용은 `uv add --dev <패키지>`)로 추가하고 `uv.lock`을 함께 커밋한다.

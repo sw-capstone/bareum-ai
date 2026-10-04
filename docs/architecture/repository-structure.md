@@ -21,8 +21,13 @@ bareum-server/
 │       ├── repository-boundaries.md
 │       └── repository-structure.md
 ├── harness/
-└── scripts/
+├── scripts/
+├── src/bareum_ai/           # AI 처리 코드 (Python 3.14, FastAPI)
+├── pyproject.toml           # 의존성·빌드 설정 (uv로 관리)
+└── uv.lock
 ```
+
+AI 처리 코드는 `src/bareum_ai/` 아래에 모듈(처리 단계) 단위로 추가하고, 테스트는 `tests/`에서 같은 구조를 따른다. 작업(이슈) 단위로 폴더를 만들지 않으며, 아직 구현하지 않는 모듈의 빈 디렉터리를 미리 만들지 않는다.
 
 백엔드와 AI는 `bareum-server`에서 관리한다는 저장소 경계만 확정되어 있다. 백엔드·AI 실행 코드의 경로와 실행·배포 단위는 아직 정하지 않았으므로 현재 구조에 해당 디렉터리나 하위 아키텍처 문서를 미리 만들지 않는다. API와 AI를 하나의 서버 저장소에서 관리한다는 결정만으로 코드 경로나 프로세스 운영이 확정되는 것은 아니다.
 
