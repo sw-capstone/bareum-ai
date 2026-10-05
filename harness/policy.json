@@ -27,7 +27,10 @@
     ".github/ISSUE_TEMPLATE/docs.yml",
     ".github/ISSUE_TEMPLATE/feature.yml",
     ".github/ISSUE_TEMPLATE/refactor.yml",
-    ".github/pull_request_template.md"
+    ".github/pull_request_template.md",
+    "pyproject.toml",
+    "uv.lock",
+    "src/bareum_ai/__init__.py"
   ],
   "checks": {
     "required_paths": true,
