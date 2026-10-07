@@ -236,6 +236,18 @@ class TableRegressionTests(unittest.TestCase):
     def test_roman_title_box_is_heading(self):
         self.assertEqual(self.title_cells("Ⅰ", "사업개요", 10).kind, "heading")
 
+    def test_sparse_grid_table_is_kept_with_review_warning(self):
+        rows = [
+            [(c * 20, r * 20, (c + 1) * 20, (r + 1) * 20) for c in range(10)]
+            for r in range(2)
+        ]
+        page = TablePage(rows, (0, 0, 200, 40))
+        lines = [line("A", (2, 2, 8, 12)), line("B", (22, 22, 28, 32))]
+        warnings = []
+        blocks, _ = P.extract_tables(page, lines, P.Stats(), warnings)
+        self.assertEqual(blocks[0].kind, "table")
+        self.assertEqual([w["code"] for w in warnings], ["table_grid_sparse"])
+
     def test_restored_space_is_not_written_to_source(self):
         raw = raw_line("AB")
         raw["spans"][0]["chars"][1]["bbox"] = (20, 0, 25, 10)

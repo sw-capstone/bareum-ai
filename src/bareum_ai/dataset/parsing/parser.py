@@ -47,6 +47,8 @@ GHOST_EMPTY_RATIO = 0.75
 GHOST_MIN_COLS = 8
 TITLE_CELL_SIZE_RATIO = 1.05
 GLYPH_DRAWING_RATIO = 1.5
+GRADIENT_STRIP_MAX_WIDTH = 15.0
+GRADIENT_STRIP_MIN = 10
 APPROVAL_MIN_HITS = 2
 APPROVAL_GAP = 30.0
 APPROVAL_TOP_RATIO = 0.5
@@ -610,7 +612,68 @@ def dashed_table_lines(drawings, boxes):
     return recovered
 
 
-def table_drawings(page, lines: list[Line]) -> list[dict]:
+def gradient_strips(drawings: list[dict]) -> set[int]:
+    """가는 채움 사각형을 맞닿게 이어 그린 그러데이션 띠의 위치(drawings 안 순번).
+
+    제목 줄 배경을 색이 조금씩 다른 사각형 수십 개로 그리면, find_tables 가 사각형 경계를
+    세로선으로 써서 수십 열짜리 빈 표를 만든다.
+    """
+    rows: dict[tuple[int, int], list[int]] = {}
+    for i, d in enumerate(drawings):
+        r = d["rect"]
+        if d.get("fill") and 0 < r.width <= GRADIENT_STRIP_MAX_WIDTH < r.height * 3:
+            rows.setdefault((round(r.y0), round(r.y1)), []).append(i)
+    strips: set[int] = set()
+    for group in rows.values():
+        group.sort(key=lambda i: drawings[i]["rect"].x0)
+        runs = [[group[0]]]
+        for i in group[1:]:
+            if drawings[i]["rect"].x0 - drawings[runs[-1][-1]]["rect"].x1 <= 0.5:
+                runs[-1].append(i)
+            else:
+                runs.append([i])
+        for run in runs:
+            colors = {tuple(drawings[i]["fill"]) for i in run}
+            if len(run) >= GRADIENT_STRIP_MIN and len(colors) >= 3:
+                strips.update(run)
+    return strips
+
+
+def drop_gradient_columns(page, tables: list, drawings: list[dict]) -> tuple[list, set]:
+    """세로 경계가 그러데이션 띠에서 나온 표를, 띠를 뺀 도형으로 그 자리에서 다시 찾는다.
+
+    다시 찾은 표가 없으면 표를 버려 글자가 본문 줄로 돌아가게 한다. 띠는 HWP 문서에 흔해서
+    페이지 전체에서 빼면 결재란 같은 다른 표까지 달라지므로, 띠로 열이 생긴 표만 다룬다.
+    """
+    strips = gradient_strips(drawings)
+    if not strips or not tables:
+        return tables, set()
+    kept = [d for i, d in enumerate(drawings) if i not in strips]
+    result, fixed = [], set()
+    for table in tables:
+        box = pymupdf.Rect(table.bbox)
+        edges = {
+            round(v, 1)
+            for i in strips
+            if drawings[i]["rect"].intersects(box)
+            for v in (drawings[i]["rect"].x0, drawings[i]["rect"].x1)
+        }
+        columns = {
+            round(v, 1)
+            for cell in table_cell_geometry(table)
+            for v in cell["bbox"][::2]
+        }
+        if len(columns & edges) < GRADIENT_STRIP_MIN:
+            result.append(table)
+            continue
+        clip = pymupdf.Rect(box.x0 - 6, box.y0 - 6, box.x1 + 6, box.y1 + 6)
+        for found in page.find_tables(clip=clip, paths=kept).tables:
+            result.append(found)
+            fixed.add(tuple(found.bbox))
+    return result, fixed
+
+
+def table_drawings(drawings: list[dict], lines: list[Line]) -> list[dict]:
     """표 찾기에 넘길 도형. 글자를 윤곽선으로 한 번 더 그린 획은 뺀다.
 
     글자 획의 짧은 가로선은 3pt 안팎 간격으로 이어져, find_tables 가 선 위치를 맞출 때
@@ -637,27 +700,29 @@ def table_drawings(page, lines: list[Line]) -> list[dict]:
             for box in words[lo:hi]
         )
 
-    return [d for d in page.get_drawings() if not is_glyph(d)]
+    return [d for d in drawings if not is_glyph(d)]
 
 
 def table_columns(table) -> int:
     return max((len(row.cells) for row in table.rows), default=0)
 
 
-def split_glyph_merged_rows(page, lines: list[Line], tables: list) -> tuple[list, set]:
+def split_glyph_merged_rows(
+    page, lines: list[Line], tables: list, drawings: list[dict]
+) -> tuple[list, set]:
     """글자 윤곽선 때문에 합쳐진 행을, 윤곽선을 뺀 도형으로 그 자리에서 다시 찾는다.
 
     페이지 전체를 다시 찾으면 '○' 같은 도형 글머리표가 빠지면서 본문 줄이 표로 잡힌다.
     그래서 이미 찾은 표 자리에서만 다시 찾고, 행이 늘고 열은 늘지 않을 때만 바꾼다.
     """
-    drawings = table_drawings(page, lines)
-    if not tables or len(drawings) == len(page.get_drawings()):
+    glyph_free = table_drawings(drawings, lines)
+    if not tables or len(glyph_free) == len(drawings):
         return tables, set()
     result, fixed = [], set()
     for table in tables:
         box = pymupdf.Rect(table.bbox)
         clip = pymupdf.Rect(box.x0 - 6, box.y0 - 6, box.x1 + 6, box.y1 + 6)
-        found = page.find_tables(clip=clip, paths=drawings).tables
+        found = page.find_tables(clip=clip, paths=glyph_free).tables
         if (
             len(found) == 1
             and max(abs(a - b) for a, b in zip(found[0].bbox, table.bbox)) < 6
@@ -676,9 +741,11 @@ def extract_tables(
 ) -> tuple[list[Block], list[Line]]:
     """표 블록과, 표에 흡수되지 않고 남은 본문 라인을 돌려준다."""
     try:
-        found, glyph_fixed = split_glyph_merged_rows(
-            page, lines, page.find_tables().tables
+        drawings = page.get_drawings()
+        found, gradient_fixed = drop_gradient_columns(
+            page, page.find_tables().tables, drawings
         )
+        found, glyph_fixed = split_glyph_merged_rows(page, lines, found, drawings)
         coarse = [
             t
             for t in found
@@ -686,7 +753,7 @@ def extract_tables(
         ]
         recovered = set()
         if coarse:
-            extra = dashed_table_lines(page.get_drawings(), [t.bbox for t in coarse])
+            extra = dashed_table_lines(drawings, [t.bbox for t in coarse])
             if extra:
                 refined = page.find_tables(add_lines=extra).tables
                 replacements = []
@@ -754,6 +821,8 @@ def extract_tables(
             transformations.add("dashed_table_boundaries_recovered")
         if tuple(table.bbox) in glyph_fixed:
             transformations.add("glyph_merged_rows_split")
+        if tuple(table.bbox) in gradient_fixed:
+            transformations.add("gradient_columns_removed")
 
         compact, compact_source = prune_grid(grid, source_grid)
         if not compact:
@@ -813,6 +882,15 @@ def extract_tables(
             )
             stats.table_headings += 1
         else:
+            if is_ghost_grid(grid):
+                warnings.append(
+                    {
+                        "code": "table_grid_sparse",
+                        "page": page.number + 1,
+                        "bbox": list(table.bbox),
+                        "detail": "원래 격자의 칸 대부분이 비어 있습니다. 배경 도형이 표 선으로 잡혔을 수 있어 표 구조 검수가 필요합니다.",
+                    }
+                )
             approval_like = (
                 approval_hits("\n".join(" | ".join(r) for r in grid))
                 >= APPROVAL_MIN_HITS
