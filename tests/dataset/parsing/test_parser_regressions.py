@@ -360,6 +360,47 @@ class TableRegressionTests(unittest.TestCase):
         self.assertEqual(warnings[0]["code"], "table_detection_failed")
 
 
+class ApprovalRegionTests(unittest.TestCase):
+    FIELDS = [
+        line("문서번호 1234", (0, 30, 80, 40)),
+        line("보존기간 5년", (0, 50, 80, 60)),
+    ]
+
+    def test_extension_keeps_approval_lines(self):
+        rows = [
+            line("홍길동", (0, 70, 40, 80)),
+            line("2019. 06. 07.", (0, 85, 80, 98), size=13),
+            line("협", (0, 100, 13, 113), size=13),
+        ]
+        region = P.detect_approval_region(self.FIELDS + rows)
+        self.assertEqual(region, (30, 113))
+
+    def test_extension_stops_at_larger_title(self):
+        title = line("2020년 사업 결과보고", (0, 70, 200, 88), size=18)
+        body = line("내용", (0, 90, 40, 100))
+        region = P.detect_approval_region(self.FIELDS + [title, body])
+        self.assertEqual(region, (30, 60))
+
+    def test_extension_stops_at_body_marker(self):
+        body = [line("1. 추진 개요", (0, 70, 80, 80)), line("내용", (0, 85, 40, 95))]
+        region = P.detect_approval_region(self.FIELDS + body)
+        self.assertEqual(region, (30, 60))
+
+    def test_lines_above_bottom_approval_are_body(self):
+        title = line("2020년 사업 결과보고", (0, 100, 200, 115), size=15)
+        fields = [
+            line("문서번호 1234", (0, 600, 80, 610)),
+            line("보존기간 5년", (0, 620, 80, 630)),
+        ]
+        pages = P.DocumentPages(
+            [{"page": 1}], [""], [[title] + fields], [[]], [[]], [841.0]
+        )
+        blocks = P._assemble_blocks(pages, P.Stats())
+        kinds = {block.text: block.kind for block in blocks}
+        self.assertNotEqual(kinds["2020년 사업 결과보고"], "approval")
+        self.assertEqual(kinds["문서번호 1234"], "approval")
+
+
 class ContractAndIntegrationTests(unittest.TestCase):
     def test_invented_marker_is_a_failure(self):
         report = checks.Report()

@@ -44,6 +44,7 @@ GHOST_EMPTY_RATIO = 0.75
 GHOST_MIN_COLS = 8
 APPROVAL_MIN_HITS = 2
 APPROVAL_GAP = 30.0
+APPROVAL_TITLE_SIZE_RATIO = 1.5
 SHADOW_MAX_LUMA = 0.70
 SCAN_COVER_RATIO = 0.7
 OUTLINE_MIN_DRAWINGS = 50
@@ -616,7 +617,8 @@ def extract_tables(
 
     blocks: list[Block] = []
     remaining = dict(enumerate(lines))
-    approval_bottom = detect_approval_region(lines) if page.number == 0 else None
+    approval_region = detect_approval_region(lines) if page.number == 0 else None
+    approval_bottom = approval_region[1] if approval_region else None
 
     for table in found:
         inside = [
@@ -792,22 +794,38 @@ def detect_running_elements(
     return result
 
 
-def detect_approval_region(lines: list[Line]) -> float | None:
-    """표지의 기안문 결재란이 끝나는 y 를 돌려준다."""
+def starts_body_after_approval(line: Line, field_size: float) -> bool:
+    """결재란 아래에서 제목이나 본문이 시작되는 줄인지 본다.
+
+    '협', '조'처럼 크게 쓴 한 글자 칸 이름은 제목으로 보지 않는다. 결재란의 날짜·공개구분 값은
+    항목명보다 1.4배까지 크게 쓰이므로 제목 기준은 그보다 크게 둔다.
+    """
+    return starts_new_block(line.text) or (
+        len(line.text.replace(" ", "")) >= TITLE_MIN_CHARS
+        and line.size > field_size * APPROVAL_TITLE_SIZE_RATIO
+    )
+
+
+def detect_approval_region(lines: list[Line]) -> tuple[float, float] | None:
+    """표지의 기안문 결재란이 차지하는 y 범위(위, 아래)를 돌려준다."""
     fields = [entry for entry in lines if APPROVAL_FIELD_RE.search(entry.text)]
     if (
         len({APPROVAL_FIELD_RE.search(entry.text).group(0) for entry in fields})
         < APPROVAL_MIN_HITS
     ):
         return None
+    top = min(entry.bbox[1] for entry in fields)
     bottom = max(entry.bbox[3] for entry in fields)
+    field_size = max(entry.size for entry in fields)
     for line in sorted(lines, key=lambda entry: entry.bbox[1]):
         if line.bbox[1] < bottom:
             continue
-        if line.bbox[1] - bottom > APPROVAL_GAP:
+        if line.bbox[1] - bottom > APPROVAL_GAP or starts_body_after_approval(
+            line, field_size
+        ):
             break
         bottom = max(bottom, line.bbox[3])
-    return bottom
+    return top, bottom
 
 
 def join_lines(
@@ -1571,8 +1589,11 @@ def _extract_document_pages(doc, stats: Stats, warnings: list[dict]) -> Document
             heights.append(page.rect.height)
             lines = extract_lines(page, stats)
             try:
+                approval_region = (
+                    detect_approval_region(lines) if page.number == 0 else None
+                )
                 regions = parser_layout.inspect_page(
-                    page, detect_approval_region(lines) if page.number == 0 else None
+                    page, approval_region[1] if approval_region else None
                 )
             except Exception as exc:
                 regions = []
@@ -1630,10 +1651,11 @@ def _assemble_blocks(pages: DocumentPages, stats: Stats) -> list[Block]:
     tagged = detect_running_elements(pages.lines, pages.heights, stats)
 
     if pages.lines:
-        bottom = detect_approval_region(pages.lines[0])
-        if bottom is not None:
+        region = detect_approval_region(pages.lines[0])
+        if region is not None:
+            top, bottom = region
             for i, line in enumerate(pages.lines[0]):
-                if line.bbox[3] <= bottom and (0, i) not in tagged:
+                if top < line.bbox[3] <= bottom and (0, i) not in tagged:
                     tagged[(0, i)] = "approval"
                     stats.approval_blocks += 1
 
