@@ -137,9 +137,15 @@ def components(cells):
     return groups
 
 
+def page_rect(page):
+    """텍스트·도형 좌표와 같은 회전 전 기준의 페이지 영역. page.rect는 회전 후 기준이다."""
+    return page.rect * page.derotation_matrix
+
+
 def inspect_page(page, approval_bottom=None, approval_padding=30):
     drawings = page.get_drawings()
     chars = glyphs(page)
+    rect = page_rect(page)
     cells = ruled_cells(drawings)
     regions = []
     if approval_bottom is not None:
@@ -185,8 +191,8 @@ def inspect_page(page, approval_bottom=None, approval_padding=30):
         if any(contains(r["bbox"], center(box)) for r in regions):
             continue
         if (
-            35 <= box[2] - box[0] <= page.rect.width * 0.45
-            and 20 <= box[3] - box[1] <= page.rect.height * 0.16
+            35 <= box[2] - box[0] <= rect.width * 0.45
+            and 20 <= box[3] - box[1] <= rect.height * 0.16
         ):
             boxes.append(box)
     for d in drawings:
@@ -196,8 +202,8 @@ def inspect_page(page, approval_bottom=None, approval_padding=30):
             fill
             and min(fill) < 0.8
             and len(d["items"]) >= 4
-            and 35 <= r[2] - r[0] <= page.rect.width * 0.4
-            and 20 <= r[3] - r[1] <= page.rect.height * 0.16
+            and 35 <= r[2] - r[0] <= rect.width * 0.4
+            and 20 <= r[3] - r[1] <= rect.height * 0.16
         ) and not any(max(abs(a - b) for a, b in zip(r, x)) < 2 for x in boxes):
             boxes.append(r)
     boxes = [

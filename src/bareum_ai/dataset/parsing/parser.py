@@ -720,7 +720,8 @@ def extract_tables(
             is_approval = (
                 approval_like
                 and page.number == 0
-                and table.bbox[1] < page.rect.height * APPROVAL_TOP_RATIO
+                and table.bbox[1]
+                < parser_layout.page_rect(page).height * APPROVAL_TOP_RATIO
             )
             if approval_like and not is_approval:
                 warnings.append(
@@ -1159,7 +1160,7 @@ def classify(
 
 def diagnose_empty_page(page) -> dict:
     """글자가 하나도 안 나온 페이지의 원인을 가른다."""
-    rect = page.rect
+    rect = parser_layout.page_rect(page)
     covering = [
         r
         for image in page.get_images(full=True)
@@ -1304,7 +1305,7 @@ def extract_figures(page, stats: Stats) -> list[Block]:
     """삽입 이미지를 자리만 잡아 둔다. 내용 판독은 비전 단계로 넘긴다."""
     figures: list[Block] = []
     seen: set[tuple] = set()
-    page_area = page.rect.width * page.rect.height
+    page_area = parser_layout.page_rect(page).get_area()
     for image in page.get_images(full=True):
         try:
             rects = page.get_image_rects(image[0])
@@ -1596,13 +1597,14 @@ def _extract_document_pages(doc, stats: Stats, warnings: list[dict]) -> Document
     try:
         for page in doc:
             raw_pages.append(page.get_text())
+            rect = parser_layout.page_rect(page)
             meta = {
                 "page": page.number + 1,
-                "width": round(page.rect.width, 2),
-                "height": round(page.rect.height, 2),
+                "width": round(rect.width, 2),
+                "height": round(rect.height, 2),
             }
             pages_meta.append(meta)
-            heights.append(page.rect.height)
+            heights.append(rect.height)
             lines = extract_lines(page, stats)
             try:
                 approval_region = (

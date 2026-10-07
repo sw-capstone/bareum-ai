@@ -45,7 +45,8 @@ class TextPage:
 
 class TablePage:
     number = 0
-    rect = NS(width=595, height=841)
+    rect = pymupdf.Rect(0, 0, 595, 841)
+    derotation_matrix = pymupdf.Identity
 
     def __init__(self, rows, bbox=(0, 0, 100, 100)):
         self.table = NS(bbox=bbox, rows=[NS(cells=r) for r in rows])
@@ -488,12 +489,32 @@ class ContractAndIntegrationTests(unittest.TestCase):
             checks.check_marker_roundtrip(a, "generated", report)
             self.assertFalse(report.violations)
 
+    def test_rotated_page_keeps_body_number_near_bottom(self):
+        # 글자 좌표는 회전 전 기준이다. 회전 후 높이(595)로 재면 y=600 이 쪽 번호 띠에 든다.
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "rotated.pdf"
+            with pymupdf.open() as doc:
+                page = doc.new_page(width=595, height=842)
+                page.insert_text((50, 100), "1. Overview")
+                page.insert_text((50, 600), "12")
+                page.set_rotation(90)
+                doc.save(path)
+            payload, _, _ = P.parse_pdf(path)
+        self.assertEqual(payload["pages"][0]["height"], 842)
+        number = next(b for b in payload["blocks"] if b["text"] == "12")
+        self.assertNotEqual(number["kind"], "page_number")
+
     def test_document_closes_when_extraction_raises(self):
         class Document:
             closed = False
 
             def __iter__(self):
-                yield NS(get_text=lambda: "", number=0, rect=NS(width=100, height=100))
+                yield NS(
+                    get_text=lambda: "",
+                    number=0,
+                    rect=pymupdf.Rect(0, 0, 100, 100),
+                    derotation_matrix=pymupdf.Identity,
+                )
 
             def close(self):
                 self.closed = True
