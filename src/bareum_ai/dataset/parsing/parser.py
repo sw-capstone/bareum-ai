@@ -28,6 +28,7 @@ SPACE_GAP_RATIO = 0.15
 DUP_OVERLAP_RATIO = 0.8
 WRAP_MAX_SHORTFALL = 0.6
 WRAP_MAX_VGAP = 1.2
+CELL_ROOM_RATIO = 1.5
 ROW_OVERLAP_RATIO = 0.5
 EDGE_BAND = 0.10
 EDGE_BAND_WIDE = 0.12
@@ -344,9 +345,20 @@ def drop_shadows(lines: list[Line], stats: Stats) -> list[Line]:
     return out
 
 
-def cell_text(cell_lines: list[Line], stats: Stats) -> tuple[str, str]:
-    """셀 안에서도 줄바꿈으로 끊긴 어절을 이어 붙인다. (정규화, 원문) 순으로 돌려준다."""
-    merged = merge_wrapped(cell_lines, Stats())
+def cell_text(
+    cell_lines: list[Line], stats: Stats, cell_box: tuple | None = None
+) -> tuple[str, str]:
+    """셀 안에서도 줄바꿈으로 끊긴 어절을 이어 붙인다. (정규화, 원문) 순으로 돌려준다.
+
+    가장 긴 줄만 기준으로 삼으면 첫 줄이 가장 긴 '10월 초순 / 10월 내' 같은 칸이 한 줄로
+    붙는다. 그래서 셀 오른쪽 테두리에서 왼쪽 여백만큼 뺀 위치까지 다음 줄 첫 글자가 들어갈
+    자리가 있었으면 이어 붙이지 않는다.
+    """
+    cell_right = None
+    if cell_box and cell_lines:
+        padding = max(0.0, min(text_left(line) for line in cell_lines) - cell_box[0])
+        cell_right = cell_box[2] - padding
+    merged = merge_wrapped(cell_lines, Stats(), cell_right=cell_right)
     stats.merged_lines += len(cell_lines) - len(merged)
     return (
         " ".join(line.text for line in merged).strip(),
@@ -517,7 +529,7 @@ def _build_table_grid(
                 fragments.append(fragment)
                 transformations.update(fragment.transformations)
             fragments.sort(key=lambda entry: (round(entry.bbox[1], 1), entry.bbox[0]))
-            text, source = cell_text(fragments, stats)
+            text, source = cell_text(fragments, stats, tuple(cell))
             cells.append(text)
             source_cells.append(source)
         grid.append(cells)
@@ -986,8 +998,19 @@ def continues_smaller_list_text(prev: Line, line: Line) -> bool:
     )
 
 
+def first_char_width(line: Line) -> float:
+    """줄 첫 글자의 폭. 어절 폭을 글자 수로 나눠 어림한다."""
+    if not line.words or not line.words[0].text:
+        return line.size
+    word = line.words[0]
+    return (word.bbox[2] - word.bbox[0]) / len(word.text)
+
+
 def merge_wrapped(
-    lines: list[Line], stats: Stats, barriers: list[tuple] | None = None
+    lines: list[Line],
+    stats: Stats,
+    barriers: list[tuple] | None = None,
+    cell_right: float | None = None,
 ) -> list[Line]:
     if not lines:
         return []
@@ -1009,6 +1032,12 @@ def merge_wrapped(
         if paragraphs:
             prev = paragraphs[-1]
             shortfall = right_edge - prev.bbox[2]
+            # 셀 안에서는 다음 줄 첫 글자가 셀 끝 남은 자리에 들어갈 수 있었으면 직접 바꾼 줄로 본다.
+            wrapped_in_cell = (
+                cell_right is None
+                or cell_right - prev.bbox[2]
+                < first_char_width(line) * CELL_ROOM_RATIO
+            )
             vgap = line.bbox[1] - prev.bbox[3]
             smaller_continuation = continues_smaller_list_text(prev, line)
             blocked = any(
@@ -1020,6 +1049,7 @@ def merge_wrapped(
             )
             if (
                 shortfall < prev.size * WRAP_MAX_SHORTFALL
+                and wrapped_in_cell
                 and 0 <= vgap < prev.size * WRAP_MAX_VGAP
                 and abs(line.bbox[0] - prev.bbox[0]) <= prev.size * 2
                 and (

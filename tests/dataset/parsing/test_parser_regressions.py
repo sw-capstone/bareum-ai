@@ -187,6 +187,29 @@ class TableRegressionTests(unittest.TestCase):
         self.assertEqual(blocks[0].source_rows, [["alpha \nbeta"]])
         self.assertFalse(remaining)
 
+    def cell_rows(self, cell, lines):
+        blocks, _ = P.extract_tables(TablePage([[cell]], cell), lines, P.Stats(), [])
+        return blocks[0].rows
+
+    def test_line_break_with_room_left_keeps_space(self):
+        # 첫 줄이 가장 길어도 셀 끝에 자리가 남았으면 작성자가 직접 바꾼 줄이다.
+        rows = self.cell_rows(
+            (0, 0, 200, 40),
+            [line("10월 초순", (5, 5, 60, 15)), line("10월 내", (5, 20, 45, 30))],
+        )
+        self.assertEqual(rows, [["10월 초순 10월 내"]])
+
+    def test_narrow_cell_wrap_joins_word(self):
+        rows = self.cell_rows(
+            (0, 0, 40, 40),
+            [line("관급", (5, 5, 23, 15)), line("자재", (5, 20, 23, 30))],
+        )
+        self.assertEqual(rows, [["관급자재"]])
+
+    def test_centered_stacked_digits_join(self):
+        digits = [line(d, (20, 5 + 15 * i, 26, 15 + 15 * i)) for i, d in enumerate("223")]
+        self.assertEqual(self.cell_rows((0, 0, 50, 60), digits), [["223"]])
+
     def test_restored_space_is_not_written_to_source(self):
         raw = raw_line("AB")
         raw["spans"][0]["chars"][1]["bbox"] = (20, 0, 25, 10)
