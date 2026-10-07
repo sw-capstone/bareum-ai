@@ -212,6 +212,30 @@ class TableRegressionTests(unittest.TestCase):
         ]
         self.assertEqual(self.cell_rows((0, 0, 50, 60), digits), [["223"]])
 
+    def title_cells(self, marker, text, size):
+        page = TablePage([[(0, 0, 30, 30), (30, 0, 300, 30)]], (0, 0, 300, 30))
+        lines = [
+            line(marker, (10, 10, 20, 20 + size), size=size),
+            line(text, (40, 10, 100, 20 + size), size=size),
+            line("본문 문장입니다", (0, 60, 200, 70)),
+        ]
+        blocks, _ = P.extract_tables(page, lines, P.Stats(), [])
+        return blocks[0]
+
+    def test_number_cell_table_at_body_size_keeps_cells(self):
+        block = self.title_cells("1", "홍길동", 10)
+        self.assertEqual(block.kind, "table")
+        self.assertEqual(block.rows, [["1", "홍길동"]])
+
+    def test_number_title_box_larger_than_body_is_heading(self):
+        block = self.title_cells("3", "사업 내용", 16)
+        self.assertEqual(
+            (block.kind, block.marker, block.text), ("heading", "3", "사업 내용")
+        )
+
+    def test_roman_title_box_is_heading(self):
+        self.assertEqual(self.title_cells("Ⅰ", "사업개요", 10).kind, "heading")
+
     def test_restored_space_is_not_written_to_source(self):
         raw = raw_line("AB")
         raw["spans"][0]["chars"][1]["bbox"] = (20, 0, 25, 10)
@@ -264,7 +288,11 @@ class TableRegressionTests(unittest.TestCase):
         page = TablePage([[(0, 0, 30, 50), (30, 0, 100, 50)]])
         blocks, _ = P.extract_tables(
             page,
-            [line("1", (5, 5, 15, 15)), line("사업개요", (40, 5, 80, 15))],
+            [
+                line("1", (5, 5, 15, 21), size=16),
+                line("사업개요", (40, 5, 80, 21), size=16),
+                line("본문 문장입니다", (0, 120, 100, 130)),
+            ],
             P.Stats(),
             [],
         )

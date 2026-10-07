@@ -45,6 +45,7 @@ VECTOR_SHAPE_MIN = 5
 VECTOR_SHAPE_MIN_SIDE = 8.0
 GHOST_EMPTY_RATIO = 0.75
 GHOST_MIN_COLS = 8
+TITLE_CELL_SIZE_RATIO = 1.05
 GLYPH_DRAWING_RATIO = 1.5
 APPROVAL_MIN_HITS = 2
 APPROVAL_GAP = 30.0
@@ -477,8 +478,14 @@ def approval_hits(text: str) -> int:
     return len(set(APPROVAL_FIELD_RE.findall(text)))
 
 
-def heading_from_grid(grid: list[list[str]]) -> tuple[int, str, str] | None:
-    """도형 안 장 제목이 1행 2칸 표로 잡힌 것을 되살린다. ['Ⅰ', '사업개요'] → 1층위."""
+def heading_from_grid(
+    grid: list[list[str]], larger_than_body: bool = False
+) -> tuple[int, str, str] | None:
+    """도형 안 장 제목이 1행 2칸 표로 잡힌 것을 되살린다. ['Ⅰ', '사업개요'] → 1층위.
+
+    숫자 칸은 ['1', '홍길동'] 같은 데이터 표에도 흔하므로, 글자가 본문보다 클 때만
+    제목으로 본다.
+    """
     if len(grid) != 1 or len(grid[0]) != 2:
         return None
     head, body = grid[0][0].strip(), grid[0][1].strip()
@@ -486,7 +493,18 @@ def heading_from_grid(grid: list[list[str]]) -> tuple[int, str, str] | None:
     if not m or not (2 <= len(body) <= 30):
         return None
     level = 1 if m.group(1) in "ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ" else 2
+    if level == 2 and not larger_than_body:
+        return None
     return level, head, body
+
+
+def body_size(lines: list[Line]) -> float:
+    """페이지 본문 글자 크기. 글자 수가 가장 많은 크기다."""
+    weights: dict[float, int] = {}
+    for line in lines:
+        key = round(line.size, 1)
+        weights[key] = weights.get(key, 0) + len(line.text.replace(" ", ""))
+    return max(weights, key=weights.get, default=0.0)
 
 
 def _assign_table_words(
@@ -769,7 +787,10 @@ def extract_tables(
             continue
 
         size = max((remaining[i].size for i in inside), default=0.0)
-        heading = heading_from_grid(compact)
+        body = body_size([remaining[i] for i in remaining if i not in inside])
+        heading = heading_from_grid(
+            compact, body > 0 and size > body * TITLE_CELL_SIZE_RATIO
+        )
         if heading:
             level, marker, text = heading
             blocks.append(
