@@ -4,6 +4,7 @@ import argparse
 import bisect
 import hashlib
 import html
+import itertools
 import json
 import math
 import os
@@ -1158,6 +1159,34 @@ def collapse_spaced(text: str) -> tuple[str, bool]:
     return text, False
 
 
+def collapse_spaced_line(line: Line) -> tuple[str, bool]:
+    """문단 줄에서는 원문에 없던 공백과 고르게 넓힌 공백만 걷어낸다.
+
+    '공 개 구 분'(원문 '공개구분', 자간 때문에 넣은 공백)과 '파   주   시'는 붙이지만,
+    작성자가 한 칸 띄운 '그 외', '7 개'는 그대로 둔다. 제목처럼 보여도 문단에서는
+    원문 띄어쓰기를 바꾸지 않는다.
+    """
+    tokens = line.text.split()
+    words = line.words
+    if (
+        len(tokens) < 2
+        or not all(len(token) == 1 for token in tokens)
+        or [word.text for word in words] != tokens
+        or any(w.source_start is None or w.source_end is None for w in words)
+    ):
+        return line.text, False
+    gaps = [
+        line.source_text[a.source_end : b.source_start]
+        for a, b in itertools.pairwise(words)
+    ]
+    wide = all(len(gap) >= 2 for gap in gaps if gap)
+    text = tokens[0] + "".join(
+        token if not gap or wide else " " + token
+        for token, gap in zip(tokens[1:], gaps)
+    )
+    return text, text != line.text
+
+
 def text_left(line: Line) -> float:
     """선행 공백을 뺀 실제 글자 시작 x. 라인 bbox 는 공백 글자까지 포함한다."""
     return line.words[0].bbox[0] if line.words else line.bbox[0]
@@ -1244,7 +1273,7 @@ def classify(
         )
 
     text, collapsed = (
-        collapse_spaced(line.text) if len(line.text) < 30 else (line.text, False)
+        collapse_spaced_line(line) if len(line.text) < 30 else (line.text, False)
     )
     transformations = list(line.transformations)
     if collapsed:

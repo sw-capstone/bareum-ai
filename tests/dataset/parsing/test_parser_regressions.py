@@ -387,6 +387,35 @@ class TableRegressionTests(unittest.TestCase):
         self.assertEqual(warnings[0]["code"], "table_detection_failed")
 
 
+class SpacedParagraphTests(unittest.TestCase):
+    def para(self, source, starts):
+        # starts: 원문에서 각 글자가 시작하는 위치. 화면 텍스트는 글자마다 공백으로 띄운다.
+        words = [
+            P.Word(source[i], (i * 10, 0, i * 10 + 8, 10), i, i + 1) for i in starts
+        ]
+        text = " ".join(word.text for word in words)
+        return P.classify(P.Line(source, text, (0, 0, 100, 10), 10, words), 0, 1)
+
+    def test_author_single_space_is_kept(self):
+        block = self.para("그 외", [0, 2])
+        self.assertEqual(block.text, "그 외")
+        self.assertNotIn("spaced_title_collapsed", block.transformations)
+
+    def test_space_restored_from_letter_spacing_is_removed(self):
+        block = self.para("공개구분", [0, 1, 2, 3])
+        self.assertEqual(block.text, "공개구분")
+        self.assertIn("spaced_title_collapsed", block.transformations)
+
+    def test_evenly_wide_spacing_is_collapsed(self):
+        self.assertEqual(self.para("파   주   시", [0, 4, 8]).text, "파주시")
+
+    def test_only_restored_spaces_are_removed_when_mixed(self):
+        self.assertEqual(
+            self.para("( 경영기획과)", [0, 2, 3, 4, 5, 6, 7]).text, "( 경영기획과)"
+        )
+        self.assertEqual(self.para("전 입 일   년", [0, 2, 4, 8]).text, "전 입 일 년")
+
+
 class ApprovalRegionTests(unittest.TestCase):
     FIELDS = (
         line("문서번호 1234", (0, 30, 80, 40)),
