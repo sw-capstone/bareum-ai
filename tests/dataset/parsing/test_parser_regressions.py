@@ -45,6 +45,7 @@ class TextPage:
 
 class TablePage:
     number = 0
+    rect = NS(width=595, height=841)
 
     def __init__(self, rows, bbox=(0, 0, 100, 100)):
         self.table = NS(bbox=bbox, rows=[NS(cells=r) for r in rows])
@@ -399,6 +400,36 @@ class ApprovalRegionTests(unittest.TestCase):
         kinds = {block.text: block.kind for block in blocks}
         self.assertNotEqual(kinds["2020년 사업 결과보고"], "approval")
         self.assertEqual(kinds["문서번호 1234"], "approval")
+
+    def approval_table(self, top):
+        page = TablePage(
+            [
+                [(0, top, 50, top + 20), (50, top, 100, top + 20)],
+                [(0, top + 20, 50, top + 40), (50, top + 20, 100, top + 40)],
+            ],
+            (0, top, 100, top + 40),
+        )
+        lines = [
+            line("문서번호", (5, top + 5, 45, top + 15)),
+            line("1234", (55, top + 5, 95, top + 15)),
+            line("보존기간", (5, top + 25, 45, top + 35)),
+            line("5년", (55, top + 25, 95, top + 35)),
+        ]
+        warnings = []
+        blocks, _ = P.extract_tables(page, lines, P.Stats(), warnings)
+        return blocks[0], warnings
+
+    def test_approval_table_on_cover_top_is_excluded(self):
+        block, warnings = self.approval_table(10)
+        self.assertEqual(block.kind, "approval")
+        self.assertTrue(block.excluded_from_retrieval)
+        self.assertFalse(warnings)
+
+    def test_approval_like_body_table_stays_table_with_warning(self):
+        block, warnings = self.approval_table(600)
+        self.assertEqual(block.kind, "table")
+        self.assertFalse(block.excluded_from_retrieval)
+        self.assertEqual(warnings[0]["code"], "approval_like_table")
 
 
 class ContractAndIntegrationTests(unittest.TestCase):

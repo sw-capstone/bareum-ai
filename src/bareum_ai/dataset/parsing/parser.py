@@ -44,6 +44,7 @@ GHOST_EMPTY_RATIO = 0.75
 GHOST_MIN_COLS = 8
 APPROVAL_MIN_HITS = 2
 APPROVAL_GAP = 30.0
+APPROVAL_TOP_RATIO = 0.5
 APPROVAL_TITLE_SIZE_RATIO = 1.5
 SHADOW_MAX_LUMA = 0.70
 SCAN_COVER_RATIO = 0.7
@@ -711,10 +712,25 @@ def extract_tables(
             )
             stats.table_headings += 1
         else:
-            is_approval = (
+            approval_like = (
                 approval_hits("\n".join(" | ".join(r) for r in grid))
                 >= APPROVAL_MIN_HITS
             )
+            # 키워드만으로는 본문 표와 구분되지 않는다. 결재란은 1쪽 상단에만 둔다.
+            is_approval = (
+                approval_like
+                and page.number == 0
+                and table.bbox[1] < page.rect.height * APPROVAL_TOP_RATIO
+            )
+            if approval_like and not is_approval:
+                warnings.append(
+                    {
+                        "code": "approval_like_table",
+                        "page": page.number + 1,
+                        "bbox": list(table.bbox),
+                        "detail": "결재란 키워드가 있지만 1쪽 상단이 아니어서 일반 표로 유지했습니다. 결재란인지 검수가 필요합니다.",
+                    }
+                )
             blocks.append(
                 Block(
                     kind="approval" if is_approval else "table",
