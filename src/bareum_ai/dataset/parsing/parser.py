@@ -31,6 +31,8 @@ DUP_OVERLAP_RATIO = 0.8
 WRAP_MAX_SHORTFALL = 0.6
 WRAP_MAX_VGAP = 1.2
 CELL_ROOM_RATIO = 1.5
+# 공백 없이 줄이 끊길 수 있는 자리. 이 뒤에서 바뀐 줄은 다음 단어가 통째로 넘어간 것이다.
+CELL_BREAK_AFTER = "∼~〜/-–‧·"
 ROW_OVERLAP_RATIO = 0.5
 EDGE_BAND = 0.10
 EDGE_BAND_WIDE = 0.12
@@ -1200,9 +1202,14 @@ def merge_wrapped(
             prev = paragraphs[-1]
             shortfall = right_edge - prev.bbox[2]
             # 셀 안에서는 다음 줄 첫 글자가 셀 끝 남은 자리에 들어갈 수 있었으면 직접 바꾼 줄로 본다.
+            # 다만 '1.∼' / '12. 15.'처럼 공백 없는 끊김 기호 뒤라면 다음 단어가 통째로 넘어간 것이다.
             wrapped_in_cell = (
                 cell_right is None
                 or cell_right - prev.bbox[2] < first_char_width(line) * CELL_ROOM_RATIO
+                or (
+                    not prev.trailing_space
+                    and prev.text.rstrip()[-1:] in tuple(CELL_BREAK_AFTER)
+                )
             )
             vgap = line.bbox[1] - prev.bbox[3]
             smaller_continuation = continues_smaller_list_text(prev, line)

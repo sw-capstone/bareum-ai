@@ -199,6 +199,14 @@ class TableRegressionTests(unittest.TestCase):
         )
         self.assertEqual(rows, [["10월 초순 10월 내"]])
 
+    def test_date_range_wrapped_after_tilde_keeps_no_space(self):
+        # '1.∼' 뒤에 자리가 남아도 다음 단어 '12.'가 통째로 넘어간 자동 줄바꿈이다.
+        rows = self.cell_rows(
+            (0, 0, 120, 40),
+            [line("2019. 11. 1.∼", (5, 5, 70, 15)), line("12. 15.", (5, 20, 40, 30))],
+        )
+        self.assertEqual(rows, [["2019. 11. 1.∼12. 15."]])
+
     def test_narrow_cell_wrap_joins_word(self):
         rows = self.cell_rows(
             (0, 0, 40, 40),
