@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 import parser_checks as A
 import pymupdf
@@ -128,6 +130,95 @@ class LayoutTests(unittest.TestCase):
         region = {"kind": "approval_grid", "bbox": [50, 0, 150, 40], "nodes": []}
         self.assertEqual(P.recover_approval_blocks([b], [[region]]), [b])
         self.assertEqual(region["status"], "needs_review")
+
+    def vertical(self, x, top, labels):
+        nodes = [
+            {"text": t, "bbox": [x, top + i * 100, x + 80, top + i * 100 + 50]}
+            for i, t in enumerate(labels)
+        ]
+        bottom = nodes[-1]["bbox"][3]
+        return {
+            "kind": "diagram",
+            "axis": "vertical",
+            "bbox": [x, top, x + 80, bottom],
+            "nodes": nodes,
+        }
+
+    def para(self, bid, box):
+        return P.Block("para", bid, bid, 1, box, id=bid, parent_id="heading")
+
+    def test_side_by_side_diagrams_keep_their_own_details(self):
+        left, right = (
+            self.vertical(0, 0, ["L0", "L1"]),
+            self.vertical(300, 0, ["R0", "R1"]),
+        )
+        blocks = []
+        for i in range(2):
+            y = i * 100 + 10
+            blocks += [
+                self.para(f"ls{i}", (10, y, 60, y + 15)),
+                self.para(f"ld{i}", (100, y, 200, y + 15)),
+                self.para(f"rs{i}", (310, y, 360, y + 15)),
+                self.para(f"rd{i}", (400, y, 500, y + 15)),
+            ]
+        regions = L.attach_regions(blocks, [[left, right]], "doc")
+        details = [[n["detail_block_ids"] for n in r["nodes"]] for r in regions]
+        self.assertEqual(details, [[["ld0"], ["ld1"]], [["rd0"], ["rd1"]]])
+        parents = {b.id: b.parent_id for b in blocks}
+        self.assertEqual((parents["ld1"], parents["rd1"]), ("ls1", "rs1"))
+        self.assertEqual(parents["rs1"], "heading")
+
+    def test_far_column_is_not_a_detail(self):
+        far = self.para("far", (80 + L.DETAIL_MAX_GAP + 5, 10, 300, 25))
+        regions = L.attach_regions([far], [[self.vertical(0, 0, ["A"])]], "doc")
+        self.assertEqual(regions[0]["nodes"][0]["detail_block_ids"], [])
+        self.assertEqual((far.parent_id, far.layout_node_id), ("heading", None))
+
+    def test_shared_detail_owner_does_not_depend_on_region_order(self):
+        upper, lower = self.vertical(0, 0, ["U"]), self.vertical(0, 30, ["D"])
+        owners = set()
+        for order in ([upper, lower], [lower, upper]):
+            shared = self.para("x", (100, 35, 200, 45))
+            regions = L.attach_regions([shared], [[dict(r) for r in order]], "doc")
+            node = next(n for r in regions for n in r["nodes"] if n["detail_block_ids"])
+            owners.add(node["text"])
+        self.assertEqual(owners, {"U"})
+
+    def test_markdown_prints_each_detail_once(self):
+        detail = self.para("d", (100, 10, 200, 25))
+        region = L.attach_regions([detail], [[self.vertical(0, 0, ["A", "B"])]], "doc")[
+            0
+        ]
+        region["nodes"][1]["detail_block_ids"] = ["d"]
+        self.assertEqual(P.to_markdown("t", [detail], [region]).count("  - d"), 1)
+
+    def test_twin_vertical_diagrams_in_pdf_are_not_duplicated(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "twin.pdf"
+            with pymupdf.open() as doc:
+                page = doc.new_page(width=595, height=842)
+                for x, label in ((60, "L"), (320, "R")):
+                    for i in range(3):
+                        y = 120 + i * 70
+                        page.draw_rect((x, y, x + 90, y + 45))
+                        page.insert_text((x + 10, y + 27), f"{label}stage{i}")
+                        page.insert_text((x + 100, y + 27), f"{label}detail{i}")
+                doc.save(path)
+            payload, markdown, _ = P.parse_pdf(path)
+        texts = {b["id"]: b["text"] for b in payload["blocks"]}
+        details = [
+            [texts[bid] for bid in n["detail_block_ids"]]
+            for r in payload["layout_regions"]
+            for n in r["nodes"]
+        ]
+        self.assertEqual(
+            details,
+            [[f"{s}detail{i}"] for s in "LR" for i in range(3)],
+        )
+        bullets = [
+            line for line in markdown.splitlines() if line.strip().startswith("-")
+        ]
+        self.assertEqual(len(bullets), len(set(bullets)))
 
     def test_layout_reference_validator_rejects_dangling_edge(self):
         doc = {

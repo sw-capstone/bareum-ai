@@ -2,6 +2,9 @@
 
 from collections import defaultdict
 
+# 세로 도식 상자와 설명 열 사이 최대 간격. 현재 코퍼스 관측 최대 24pt(들여쓴 줄)에 여유를 둔 값이다.
+DETAIL_MAX_GAP = 36.0
+
 ARROW_DIRECTIONS = {
     **dict.fromkeys("▶→➜►➔▷➡", "right"),
     **dict.fromkeys("◀←◄", "left"),
@@ -303,35 +306,10 @@ def attach_regions(blocks, pages, document_id):
                         if b.id in n["block_ids"]:
                             b.layout_node_id = n["id"]
                 if region["axis"] == "vertical":
-                    for i, n in enumerate(nodes):
-                        cy = center(n["bbox"])[1]
-                        lo = (
-                            (center(nodes[i - 1]["bbox"])[1] + cy) / 2
-                            if i
-                            else n["bbox"][1] - 25
-                        )
-                        hi = (
-                            (cy + center(nodes[i + 1]["bbox"])[1]) / 2
-                            if i + 1 < len(nodes)
-                            else n["bbox"][3] + 10
-                        )
-                        details = [
-                            b
-                            for b in page_blocks
-                            if b.kind in ("para", "item", "note")
-                            and b.bbox[0] >= n["bbox"][2] + 2
-                            and lo <= center(b.bbox)[1] < hi
-                        ]
-                        n["detail_block_ids"] = [b.id for b in details]
+                    for n in nodes:
                         roots = [b for b in page_blocks if b.id in n["block_ids"]]
-                        parent = roots[0] if roots else None
-                        for b in details:
-                            b.layout_node_id = n["id"]
-                            if parent and b.parent_id == parent.parent_id:
-                                b.parent_id = parent.id
-                        if parent:
-                            for b in roots[1:]:
-                                b.parent_id = parent.id
+                        for b in roots[1:]:
+                            b.parent_id = roots[0].id
                 for a, b in zip(nodes, nodes[1:]):
                     edge = {
                         "source": a["id"],
@@ -365,4 +343,93 @@ def attach_regions(blocks, pages, document_id):
                                 )
                     region["edges"].append(edge)
             regions.append(region)
+        attach_vertical_details(
+            page_blocks, [r for r in regions if r["page"] == page_no]
+        )
     return regions
+
+
+def vertical_detail_candidates(page_blocks, page_regions):
+    """세로 도식 상자마다 오른쪽 설명 후보를 (거리, 도식 x0, 도식 y0, node_id) 순 키와 함께 모은다."""
+    diagrams = [r for r in page_regions if r["kind"] == "diagram"]
+    owned = {bid for r in page_regions for n in r["nodes"] for bid in n["block_ids"]}
+    free = [
+        b
+        for b in page_blocks
+        if b.kind in ("para", "item", "note")
+        and b.id not in owned
+        and not any(contains(r["bbox"], center(b.bbox)) for r in diagrams)
+    ]
+    candidates = []
+    for region in diagrams:
+        if region["axis"] != "vertical":
+            continue
+        nodes = region["nodes"]
+        for i, n in enumerate(nodes):
+            cy = center(n["bbox"])[1]
+            lo = (center(nodes[i - 1]["bbox"])[1] + cy) / 2 if i else n["bbox"][1] - 25
+            hi = (
+                (cy + center(nodes[i + 1]["bbox"])[1]) / 2
+                if i + 1 < len(nodes)
+                else n["bbox"][3] + 10
+            )
+            # 같은 높이에서 오른쪽에 있는 다른 도식 앞까지만 본다.
+            limit = min(
+                (
+                    other["bbox"][0]
+                    for other in diagrams
+                    if other is not region
+                    and other["bbox"][0] >= n["bbox"][2]
+                    and other["bbox"][1] < hi
+                    and other["bbox"][3] > lo
+                ),
+                default=float("inf"),
+            )
+            beside = [
+                b
+                for b in free
+                if b.bbox[0] >= n["bbox"][2] + 2
+                and b.bbox[2] <= limit + 1
+                and lo <= center(b.bbox)[1] < hi
+            ]
+            if not beside:
+                continue
+            column = min(b.bbox[0] for b in beside)
+            if column - n["bbox"][2] > DETAIL_MAX_GAP:
+                continue
+            for b in beside:
+                if b.bbox[0] - column <= DETAIL_MAX_GAP:
+                    key = (
+                        b.bbox[0] - n["bbox"][2],
+                        region["bbox"][0],
+                        region["bbox"][1],
+                        n["id"],
+                    )
+                    candidates.append((key, b, n))
+    return candidates
+
+
+def attach_vertical_details(page_blocks, page_regions):
+    """설명 블록마다 가장 가까운 상자 하나만 고른 뒤 관계를 반영한다.
+
+    도식을 차례로 처리하며 바로 반영하면, 나란한 도식에서 같은 블록이 두 상자의 설명이 되고
+    layout_node_id·parent_id 가 마지막에 처리한 도식을 따른다.
+    """
+    owner = {}
+    for key, block, node in vertical_detail_candidates(page_blocks, page_regions):
+        if block.id not in owner or key < owner[block.id][0]:
+            owner[block.id] = (key, node)
+    roots = {
+        n["id"]: next((b for b in page_blocks if b.id in n["block_ids"]), None)
+        for r in page_regions
+        for n in r["nodes"]
+    }
+    for b in page_blocks:
+        if b.id not in owner:
+            continue
+        node = owner[b.id][1]
+        node["detail_block_ids"].append(b.id)
+        b.layout_node_id = node["id"]
+        parent = roots[node["id"]]
+        if parent and b.parent_id == parent.parent_id:
+            b.parent_id = parent.id

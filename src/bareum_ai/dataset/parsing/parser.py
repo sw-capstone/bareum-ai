@@ -2175,6 +2175,8 @@ def to_markdown(title: str, blocks: list[Block], layout_regions=()) -> str:
             ):
                 diagrams[b.id] = region
     rendered = set()
+    # 설명 블록은 한 상자에만 붙지만, 어긋난 입력에서도 같은 문장을 두 번 내보내지 않는다.
+    printed_details = set()
     for block in blocks:
         if block.kind in EXCLUDED_KINDS:
             continue
@@ -2189,6 +2191,9 @@ def to_markdown(title: str, blocks: list[Block], layout_regions=()) -> str:
                 for node in region["nodes"]:
                     out.append("- " + node["text"].replace("\n", " · "))
                     for bid in node["detail_block_ids"]:
+                        if bid in printed_details:
+                            continue
+                        printed_details.add(bid)
                         out.append("  - " + index[bid].text.replace("\n", " "))
                 order = {n["id"]: str(i + 1) for i, n in enumerate(region["nodes"])}
                 directed = [
