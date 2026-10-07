@@ -51,7 +51,7 @@ class TablePage:
     def __init__(self, rows, bbox=(0, 0, 100, 100)):
         self.table = NS(bbox=bbox, rows=[NS(cells=r) for r in rows])
 
-    def find_tables(self):
+    def find_tables(self, **kwargs):
         return NS(tables=[self.table])
 
     def get_drawings(self):
@@ -207,7 +207,9 @@ class TableRegressionTests(unittest.TestCase):
         self.assertEqual(rows, [["관급자재"]])
 
     def test_centered_stacked_digits_join(self):
-        digits = [line(d, (20, 5 + 15 * i, 26, 15 + 15 * i)) for i, d in enumerate("223")]
+        digits = [
+            line(d, (20, 5 + 15 * i, 26, 15 + 15 * i)) for i, d in enumerate("223")
+        ]
         self.assertEqual(self.cell_rows((0, 0, 50, 60), digits), [["223"]])
 
     def test_restored_space_is_not_written_to_source(self):
@@ -386,10 +388,10 @@ class TableRegressionTests(unittest.TestCase):
 
 
 class ApprovalRegionTests(unittest.TestCase):
-    FIELDS = [
+    FIELDS = (
         line("문서번호 1234", (0, 30, 80, 40)),
         line("보존기간 5년", (0, 50, 80, 60)),
-    ]
+    )
 
     def test_extension_keeps_approval_lines(self):
         rows = [
@@ -397,18 +399,18 @@ class ApprovalRegionTests(unittest.TestCase):
             line("2019. 06. 07.", (0, 85, 80, 98), size=13),
             line("협", (0, 100, 13, 113), size=13),
         ]
-        region = P.detect_approval_region(self.FIELDS + rows)
+        region = P.detect_approval_region([*self.FIELDS, *rows])
         self.assertEqual(region, (30, 113))
 
     def test_extension_stops_at_larger_title(self):
         title = line("2020년 사업 결과보고", (0, 70, 200, 88), size=18)
         body = line("내용", (0, 90, 40, 100))
-        region = P.detect_approval_region(self.FIELDS + [title, body])
+        region = P.detect_approval_region([*self.FIELDS, title, body])
         self.assertEqual(region, (30, 60))
 
     def test_extension_stops_at_body_marker(self):
         body = [line("1. 추진 개요", (0, 70, 80, 80)), line("내용", (0, 85, 40, 95))]
-        region = P.detect_approval_region(self.FIELDS + body)
+        region = P.detect_approval_region([*self.FIELDS, *body])
         self.assertEqual(region, (30, 60))
 
     def test_lines_above_bottom_approval_are_body(self):

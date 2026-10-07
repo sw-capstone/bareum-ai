@@ -1,6 +1,7 @@
 """공공보고서 PDF의 원문, 블록, 표, 구간을 추출한다."""
 
 import argparse
+import bisect
 import hashlib
 import html
 import json
@@ -43,6 +44,7 @@ VECTOR_SHAPE_MIN = 5
 VECTOR_SHAPE_MIN_SIDE = 8.0
 GHOST_EMPTY_RATIO = 0.75
 GHOST_MIN_COLS = 8
+GLYPH_DRAWING_RATIO = 1.5
 APPROVAL_MIN_HITS = 2
 APPROVAL_GAP = 30.0
 APPROVAL_TOP_RATIO = 0.5
@@ -589,12 +591,75 @@ def dashed_table_lines(drawings, boxes):
     return recovered
 
 
+def table_drawings(page, lines: list[Line]) -> list[dict]:
+    """표 찾기에 넘길 도형. 글자를 윤곽선으로 한 번 더 그린 획은 뺀다.
+
+    글자 획의 짧은 가로선은 3pt 안팎 간격으로 이어져, find_tables 가 선 위치를 맞출 때
+    서로 다른 가로선을 한 위치로 모은다. 그러면 두 행이 한 행으로 합쳐진다.
+    """
+    words = sorted(
+        (w.bbox for line in lines for w in line.words), key=lambda box: box[1]
+    )
+    tops = [box[1] for box in words]
+    tallest = max((box[3] - box[1] for box in words), default=0.0)
+
+    def is_glyph(drawing: dict) -> bool:
+        # 글자 윤곽선은 곡선·직선으로 채운 도형이다. 선만 긋는 점선 표 선이나 사각형은 남긴다.
+        if not drawing.get("fill") or any(item[0] == "re" for item in drawing["items"]):
+            return False
+        r = drawing["rect"]
+        lo = bisect.bisect_left(tops, r.y1 - tallest - 1)
+        hi = bisect.bisect_right(tops, r.y0 + 1)
+        return any(
+            box[0] - 1 <= r.x0
+            and r.x1 <= box[2] + 1
+            and r.y1 <= box[3] + 1
+            and r.width <= (box[3] - box[1]) * GLYPH_DRAWING_RATIO
+            for box in words[lo:hi]
+        )
+
+    return [d for d in page.get_drawings() if not is_glyph(d)]
+
+
+def table_columns(table) -> int:
+    return max((len(row.cells) for row in table.rows), default=0)
+
+
+def split_glyph_merged_rows(page, lines: list[Line], tables: list) -> tuple[list, set]:
+    """글자 윤곽선 때문에 합쳐진 행을, 윤곽선을 뺀 도형으로 그 자리에서 다시 찾는다.
+
+    페이지 전체를 다시 찾으면 '○' 같은 도형 글머리표가 빠지면서 본문 줄이 표로 잡힌다.
+    그래서 이미 찾은 표 자리에서만 다시 찾고, 행이 늘고 열은 늘지 않을 때만 바꾼다.
+    """
+    drawings = table_drawings(page, lines)
+    if not tables or len(drawings) == len(page.get_drawings()):
+        return tables, set()
+    result, fixed = [], set()
+    for table in tables:
+        box = pymupdf.Rect(table.bbox)
+        clip = pymupdf.Rect(box.x0 - 6, box.y0 - 6, box.x1 + 6, box.y1 + 6)
+        found = page.find_tables(clip=clip, paths=drawings).tables
+        if (
+            len(found) == 1
+            and max(abs(a - b) for a, b in zip(found[0].bbox, table.bbox)) < 6
+            and len(found[0].rows) > len(table.rows)
+            and table_columns(found[0]) <= table_columns(table)
+        ):
+            result.append(found[0])
+            fixed.add(tuple(found[0].bbox))
+        else:
+            result.append(table)
+    return result, fixed
+
+
 def extract_tables(
     page, lines: list[Line], stats: Stats, warnings: list[dict]
 ) -> tuple[list[Block], list[Line]]:
     """표 블록과, 표에 흡수되지 않고 남은 본문 라인을 돌려준다."""
     try:
-        found = page.find_tables().tables
+        found, glyph_fixed = split_glyph_merged_rows(
+            page, lines, page.find_tables().tables
+        )
         coarse = [
             t
             for t in found
@@ -668,6 +733,8 @@ def extract_tables(
         )
         if tuple(table.bbox) in recovered:
             transformations.add("dashed_table_boundaries_recovered")
+        if tuple(table.bbox) in glyph_fixed:
+            transformations.add("glyph_merged_rows_split")
 
         compact, compact_source = prune_grid(grid, source_grid)
         if not compact:
@@ -1035,8 +1102,7 @@ def merge_wrapped(
             # 셀 안에서는 다음 줄 첫 글자가 셀 끝 남은 자리에 들어갈 수 있었으면 직접 바꾼 줄로 본다.
             wrapped_in_cell = (
                 cell_right is None
-                or cell_right - prev.bbox[2]
-                < first_char_width(line) * CELL_ROOM_RATIO
+                or cell_right - prev.bbox[2] < first_char_width(line) * CELL_ROOM_RATIO
             )
             vgap = line.bbox[1] - prev.bbox[3]
             smaller_continuation = continues_smaller_list_text(prev, line)
