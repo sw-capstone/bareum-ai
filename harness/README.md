@@ -26,5 +26,18 @@
 
 UTF-8로 표현할 수 없는 정책 문자열도 정책 오류로 처리하고 실패 리포트를 남긴다. 정상적인 한글과 이모지 문자열은 허용한다.
 
+## 리포트 실행 정보
+
+리포트는 기존 검사 결과에 `execution` 객체를 추가한다.
+
+- `repository`: GitHub Actions의 저장소명 또는 로컬 Git의 `origin`에서 확인한 `owner/repository`. 접속 URL과 인증 정보는 저장하지 않는다.
+- `git_sha`: 검사 디렉터리에서 실제 체크아웃된 `HEAD`의 SHA.
+- `working_tree_dirty`: 미커밋·미추적 변경 여부. `true`이면 SHA만으로 당시 파일 내용을 재현할 수 없다.
+- `environment`: `local`, `github_actions`, `ci` 중 하나.
+- `ci_run`: CI 실행 ID·재실행 번호·워크플로우·작업·이벤트·ref·이벤트 SHA·실행 URL. 로컬 실행에서는 `null`이다.
+- `unavailable`: 확인하지 못한 식별 정보의 필드명 목록. 해당 값은 `null`로 남기고 추정하지 않는다.
+
+`ci_run.event_sha`는 GitHub 이벤트의 SHA이며 실제 검사한 `git_sha`와 다를 수 있다. 실행 정보는 정책 오류로 실패한 리포트에도 기록한다. 기존 `generated_at`, `policy_version`, `mode`, `summary`, `checks`, `findings`는 유지한다.
+
 - [하네스 설계 v1.4](../docs/harness/harness-v1.4.md)
 - [확장 로드맵](../docs/harness/harness-file-roadmap.md)
