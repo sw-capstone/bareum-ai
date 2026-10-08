@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote
 
 SKIP_PARTS = {".git", ".venv", "build", "dist", "node_modules", "reports", "__pycache__"}
@@ -55,6 +55,64 @@ def iter_files(root: Path):
             yield path
 
 
+def policy_path_error(root: Path, value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip() or "\x00" in value:
+        return "비어 있지 않은 경로 문자열이어야 합니다."
+    if Path(value).is_absolute() or PureWindowsPath(value).is_absolute():
+        return "저장소 내부의 상대 경로여야 합니다."
+    try:
+        (root / value).resolve().relative_to(root.resolve())
+    except (ValueError, OSError, RuntimeError):
+        return "경로가 저장소 밖을 가리키거나 해석할 수 없습니다."
+    return None
+
+
+def validate_policy(root: Path, policy: object, *, require_metadata: bool = False) -> Finding | None:
+    def error(field: str, message: str) -> Finding:
+        return Finding("HAR-POLICY-001", "error", f"harness/policy.json#{field}", f"{field}: {message}")
+
+    if not isinstance(policy, dict):
+        return error("policy", "JSON 객체여야 합니다.")
+    checks = policy.get("checks", {})
+    if not isinstance(checks, dict):
+        return error("checks", "검사 이름과 true 또는 false 값으로 구성된 객체여야 합니다.")
+    unknown = set(checks) - CHECK_NAMES
+    if unknown:
+        return error("checks", f"알 수 없는 검사 이름: {', '.join(sorted(map(str, unknown)))}")
+    for name, value in checks.items():
+        if not isinstance(value, bool):
+            return error(f"checks.{name}", "true 또는 false여야 합니다.")
+    if require_metadata:
+        for field in ("version", "required_paths", "checks"):
+            if field not in policy:
+                return error(field, "필수 항목이 없습니다.")
+    if "version" in policy:
+        version = policy["version"]
+        if not isinstance(version, str) or not version.strip():
+            return error("version", "비어 있지 않은 문자열이어야 합니다.")
+    allowed = {"version", "required_paths", "checks", "autofix"}
+    unknown_fields = set(policy) - allowed
+    if unknown_fields:
+        return error("policy", f"알 수 없는 항목: {', '.join(sorted(map(str, unknown_fields)))}")
+    paths = policy.get("required_paths", [])
+    if not isinstance(paths, list):
+        return error("required_paths", "경로 문자열 배열이어야 합니다.")
+    for index, value in enumerate(paths):
+        message = policy_path_error(root, value)
+        if message:
+            return error(f"required_paths[{index}]", message)
+    if "autofix" in policy:
+        autofix = policy["autofix"]
+        if not isinstance(autofix, dict):
+            return error("autofix", "객체여야 합니다.")
+        for field, value in autofix.items():
+            if field not in {"enabled", "semantic_changes"}:
+                return error("autofix", f"알 수 없는 항목: {field}")
+            if not isinstance(value, bool):
+                return error(f"autofix.{field}", "true 또는 false여야 합니다.")
+    return None
+
+
 def check_required_paths(root: Path, policy: dict[str, object]) -> list[Finding]:
     required_paths = policy.get("required_paths", [])
     if not isinstance(required_paths, list):
@@ -68,13 +126,14 @@ def check_required_paths(root: Path, policy: dict[str, object]) -> list[Finding]
         ]
     findings: list[Finding] = []
     for index, value in enumerate(required_paths):
-        if not isinstance(value, str):
+        message = policy_path_error(root, value)
+        if message:
             findings.append(
                 Finding(
                     "HAR-STRUCT-001",
                     "error",
                     f"harness/policy.json#required_paths[{index}]",
-                    "필수 경로는 문자열이어야 합니다.",
+                    message,
                 )
             )
         elif not (root / value).exists():
@@ -152,23 +211,10 @@ def check_secret_patterns(root: Path) -> list[Finding]:
 
 
 def evaluate_checks(root: Path, policy: dict[str, object]) -> tuple[list[Finding], list[CheckExecution]]:
+    policy_finding = validate_policy(root, policy)
+    if policy_finding:
+        return [policy_finding], [CheckExecution("policy", "failed", 1)]
     enabled = policy.get("checks", {})
-    if isinstance(enabled, dict) and set(enabled) - CHECK_NAMES:
-        finding = Finding(
-            "HAR-POLICY-001",
-            "error",
-            "harness/policy.json",
-            f"알 수 없는 검사 이름: {', '.join(sorted(set(enabled) - CHECK_NAMES))}",
-        )
-        return [finding], [CheckExecution("policy", "failed", 1)]
-    if not isinstance(enabled, dict) or any(not isinstance(value, bool) for value in enabled.values()):
-        finding = Finding(
-            "HAR-POLICY-001",
-            "error",
-            "harness/policy.json",
-            "checks는 검사 이름과 true 또는 false 값으로 구성된 객체여야 합니다.",
-        )
-        return [finding], [CheckExecution("policy", "failed", 1)]
 
     checks = (
         ("required_paths", lambda: check_required_paths(root, policy)),

@@ -5,34 +5,29 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .checks import CHECK_NAMES, CheckExecution, Finding, evaluate_checks
+from .checks import CheckExecution, Finding, evaluate_checks, validate_policy
 
 
 def load_policy(root: Path) -> tuple[dict[str, object] | None, Finding | None]:
+    def unique_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            key.encode("utf-8")
+            if key in result:
+                raise ValueError(f"중복된 정책 항목: {key}")
+            result[key] = value
+        return result
+
     path = root / "harness/policy.json"
     try:
-        policy = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        policy = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_keys)
+        # Escaped lone surrogates parse as JSON but cannot be written to the UTF-8 report.
+        json.dumps(policy, ensure_ascii=False).encode("utf-8")
+    except (OSError, UnicodeDecodeError, ValueError) as error:
         return None, Finding("HAR-POLICY-001", "error", "harness/policy.json", f"정책 파일을 읽을 수 없습니다: {error}")
-    checks = policy.get("checks") if isinstance(policy, dict) else None
-    if (
-        not isinstance(policy, dict)
-        or not isinstance(policy.get("version"), str)
-        or not isinstance(checks, dict)
-        or any(not isinstance(value, bool) for value in checks.values())
-    ):
-        return None, Finding(
-            "HAR-POLICY-001",
-            "error",
-            "harness/policy.json",
-            "정책은 version 문자열과 true 또는 false 검사 설정을 가진 JSON 객체여야 합니다.",
-        )
-    unknown = set(checks) - CHECK_NAMES
-    if unknown:
-        return None, Finding(
-            "HAR-POLICY-001", "error", "harness/policy.json",
-            f"알 수 없는 검사 이름: {', '.join(sorted(unknown))}",
-        )
+    finding = validate_policy(root, policy, require_metadata=True)
+    if finding:
+        return None, finding
     return policy, None
 
 
