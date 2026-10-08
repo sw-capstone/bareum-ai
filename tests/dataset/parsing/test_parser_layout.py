@@ -44,7 +44,13 @@ class LayoutTests(unittest.TestCase):
                 page.draw_line((40, y), (160, y))
             for x, text in [(45, "A"), (65, "B"), (105, "C"), (125, "D")]:
                 page.insert_text((x, 60), text)
-            regions = L.inspect_page(page, 90)
+            nodes = [
+                {"bbox": box, "text": L.glyph_text([c for c in L.glyphs(page)
+                    if L.contains(box, L.center(c["bbox"]))])}
+                for box in sorted(L.ruled_cells(page.get_drawings()), key=lambda b: (b[1], b[0]))
+            ]
+            regions = L.inspect_page(page, [{"kind": "approval_grid", "bbox": [40, 40, 160, 110],
+                                             "nodes": nodes, "status": "geometry_recovered"}])
             self.assertEqual(
                 [n["text"] for n in regions[0]["nodes"]], ["AB", "CD", "", ""]
             )
@@ -127,7 +133,8 @@ class LayoutTests(unittest.TestCase):
 
     def test_cross_boundary_approval_preserves_existing_blocks(self):
         b = P.Block("approval", "ABC", "ABC", 1, (0, 0, 200, 30))
-        region = {"kind": "approval_grid", "bbox": [50, 0, 150, 40], "nodes": []}
+        region = {"kind": "approval_grid", "bbox": [50, 0, 150, 40], "nodes": [],
+                  "status": "geometry_recovered"}
         self.assertEqual(P.recover_approval_blocks([b], [[region]]), [b])
         self.assertEqual(region["status"], "needs_review")
 
@@ -252,6 +259,7 @@ class LayoutTests(unittest.TestCase):
         ]
         region = {
             "kind": "approval_grid",
+            "status": "geometry_recovered",
             "bbox": [0, 0, 100, 20],
             "nodes": [
                 {"bbox": [0, 0, 50, 20], "text": "LABEL"},
@@ -268,3 +276,17 @@ class LayoutTests(unittest.TestCase):
             {"blocks": [P.block_to_dict(recovered)]}, "fixture", report
         )
         self.assertFalse(report.violations)
+
+
+class ApprovalRecoverySafetyTests(unittest.TestCase):
+    def test_containing_body_table_is_not_reclassified(self):
+        block = P.Block("table", "metadata and body", "metadata and body", 1,
+                        (0, 0, 200, 100), rows=[["metadata"], ["body"]])
+        region = {"kind": "approval_grid", "bbox": [0, 0, 100, 20],
+                  "nodes": [{"bbox": [0, 0, 100, 20], "text": "metadata"}],
+                  "status": "geometry_recovered"}
+        result = P.recover_approval_blocks([block], [[region]])
+        self.assertEqual(result, [block])
+        self.assertEqual(block.kind, "table")
+        self.assertFalse(block.excluded_from_retrieval)
+        self.assertEqual(region["status"], "needs_review")

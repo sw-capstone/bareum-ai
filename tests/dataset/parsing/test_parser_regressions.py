@@ -199,6 +199,57 @@ class TableRegressionTests(unittest.TestCase):
         )
         self.assertEqual(rows, [["10월 초순 10월 내"]])
 
+    def test_centered_date_lines_keep_space_and_source(self):
+        rows = self.cell_rows(
+            (100, 80, 300, 140),
+            [line("10월 초순", (175, 95, 225, 105)),
+             line("10월 내", (180, 115, 220, 125))],
+        )
+        self.assertEqual(rows, [["10월 초순 10월 내"]])
+
+    def test_independent_values_keep_boundaries_across_cell_layouts(self):
+        # 실제 삽입 글자의 폭을 측정한다. Font("korea")의 폭과 insert_text 폭은 다르다.
+        pairs = [("10월 초순", "10월 내"), ("2021. 10. 1.", "2021. 10. 2."),
+                 ("2021-10-01", "2021-10-02"), ("오전 9시", "오후 2시"),
+                 ("1,000원", "2,000원"), ("홍보협력과", "전시연구단")]
+        with tempfile.TemporaryDirectory() as directory:
+            for index, (texts, align, margin, size) in enumerate(
+                (texts, align, margin, size) for texts in pairs
+                for align in ("left", "center", "right") for margin in (10, 100)
+                for size in (8, 12)
+            ):
+                with self.subTest(texts=texts, align=align, margin=margin, size=size):
+                    measure = pymupdf.open()
+                    page = measure.new_page()
+                    for text, y in zip(texts, (30, 70)):
+                        page.insert_text((10, y), text, fontname="korea", fontsize=size)
+                    lines = [l for b in page.get_text("dict")["blocks"] if b["type"] == 0 for l in b["lines"]]
+                    lengths = [l["bbox"][2] - l["bbox"][0] for l in lines]
+                    measure.close()
+                    right = 100 + max(lengths) + margin
+                    path = Path(directory) / f"case_{index}.pdf"
+                    pdf = pymupdf.open()
+                    page = pdf.new_page()
+                    page.draw_rect((50, 80, right, 150))
+                    page.draw_line((100, 80), (100, 150))
+                    page.insert_text((55, 105), "기간", fontname="korea", fontsize=10)
+                    for text, length, y in zip(texts, lengths, (105, 105 + size * 2)):
+                        x = (105 if align == "left" else right - 5 - length if align == "right"
+                             else (100 + right - length) / 2)
+                        page.insert_text((x, y), text, fontname="korea", fontsize=size)
+                    pdf.save(path)
+                    pdf.close()
+                    doc, markdown, _ = P.parse_pdf(path)
+                    table = next(b for b in doc["blocks"] if b["kind"] == "table")
+                    self.assertEqual(table["rows"], [["기간", " ".join(texts)]])
+                    self.assertEqual(table["source_rows"], [["기간", "\n".join(texts)]])
+                    cell = next(c for c in table["cells"] if c["col"] == 1)
+                    decision = cell["line_breaks"][0]
+                    self.assertEqual(decision["separator"], " ")
+                    self.assertEqual(decision["source_offset"], len(texts[0]))
+                    self.assertEqual(decision["text_offset"], len(texts[0]))
+                    self.assertIn(" ".join(texts), markdown)
+
     def test_date_range_wrapped_after_tilde_keeps_no_space(self):
         # '1.∼' 뒤에 자리가 남아도 다음 단어 '12.'가 통째로 넘어간 자동 줄바꿈이다.
         rows = self.cell_rows(
@@ -207,18 +258,47 @@ class TableRegressionTests(unittest.TestCase):
         )
         self.assertEqual(rows, [["2019. 11. 1.∼12. 15."]])
 
-    def test_narrow_cell_wrap_joins_word(self):
-        rows = self.cell_rows(
-            (0, 0, 40, 40),
+    def test_ambiguous_word_wrap_preserves_boundary_and_warns(self):
+        cell = (0, 0, 40, 40)
+        warnings = []
+        blocks, _ = P.extract_tables(TablePage([[cell]], cell),
             [line("관급", (5, 5, 23, 15)), line("자재", (5, 20, 23, 30))],
-        )
-        self.assertEqual(rows, [["관급자재"]])
+            P.Stats(), warnings)
+        self.assertEqual(blocks[0].rows, [["관급 자재"]])
+        self.assertEqual(blocks[0].source_rows, [["관급\n자재"]])
+        self.assertEqual(blocks[0].cells[0]["line_breaks"][0]["reason"], "boundary_preserved")
+        self.assertTrue(blocks[0].cells[0]["line_breaks"][0]["needs_review"])
+        self.assertIn("table_cell_linebreak_review", {w["code"] for w in warnings})
+
+    def test_range_join_is_explicit_and_does_not_swallow_new_items(self):
+        for head, tail, expected in [
+            ("2021. 10. 1.~", "10. 2.", "2021. 10. 1.~10. 2."),
+            ("2021. 10. 1.~ ", "10. 2.", "2021. 10. 1.~ 10. 2."),
+            ("2021. 10. 1.~", "1. 개요", "2021. 10. 1.~ 1. 개요"),
+            ("문의-", "다음 항목", "문의- 다음 항목"),
+        ]:
+            with self.subTest(head=head, tail=tail):
+                notes = []
+                value, source = P.cell_text([
+                    line(head, (5, 5, 90, 15), trailing=head.endswith(" ")),
+                    line(tail, (5, 20, 90, 30))], P.Stats(), notes)
+                self.assertEqual(value, expected)
+                self.assertEqual(source, head + "\n" + tail)
+                self.assertEqual(notes[0]["source_offset"], len(head))
 
     def test_centered_stacked_digits_join(self):
         digits = [
             line(d, (20, 5 + 15 * i, 26, 15 + 15 * i)) for i, d in enumerate("223")
         ]
         self.assertEqual(self.cell_rows((0, 0, 50, 60), digits), [["223"]])
+
+    def test_single_character_symbols_do_not_jump_over_cell_text(self):
+        tokens = ["∙", "∙", "전시", "∙", "(4건)", "∙"]
+        lines = [line(text, (20, 5 + 15 * i, 30 + len(text) * 5, 15 + 15 * i))
+                 for i, text in enumerate(tokens)]
+        normalized, source = P.cell_text(lines, P.Stats())
+        self.assertEqual(normalized.replace(" ", ""), "".join(tokens))
+        self.assertEqual(source, "\n".join(tokens))
 
     def title_cells(self, marker, text, size):
         page = TablePage([[(0, 0, 30, 30), (30, 0, 300, 30)]], (0, 0, 300, 30))
@@ -238,11 +318,32 @@ class TableRegressionTests(unittest.TestCase):
     def test_number_title_box_larger_than_body_is_heading(self):
         block = self.title_cells("3", "사업 내용", 16)
         self.assertEqual(
-            (block.kind, block.marker, block.text), ("heading", "3", "사업 내용")
+            (block.kind, block.marker, P.head_text(block)), ("table", "3", "사업 내용")
         )
+        self.assertTrue(P.is_heading(block))
+        self.assertEqual(block.rows, [["3", "사업 내용"]])
+        self.assertEqual(len(block.cells), 2)
+        self.assertEqual(block.source_rows, [["3", "사업 내용"]])
+        body = P.Block("para", "본문", "본문", 1, (0, 80, 100, 90))
+        P.assign_hierarchy([block, body], "doc")
+        sections = P.build_sections([block, body], "doc")
+        self.assertEqual(sections[0].head_text, "사업 내용")
+        self.assertEqual(body.parent_id, block.id)
+        self.assertIn("### 3 사업 내용", P.to_markdown("test", [block, body]))
 
     def test_roman_title_box_is_heading(self):
-        self.assertEqual(self.title_cells("Ⅰ", "사업개요", 10).kind, "heading")
+        block = self.title_cells("Ⅰ", "사업개요", 10)
+        self.assertEqual(block.kind, "table")
+        self.assertTrue(P.is_heading(block))
+
+    def test_large_number_data_table_preserves_cells_without_heading(self):
+        block = self.title_cells("1", "홍길동", 16)
+        self.assertEqual(block.kind, "table")
+        self.assertEqual(block.rows, [["1", "홍길동"]])
+        self.assertEqual(len(block.cells), 2)
+        self.assertFalse(P.is_heading(block))
+        self.assertEqual(block.heading_hint["status"], "needs_review")
+        self.assertIn("| 1 | 홍길동 |", P.to_markdown("test", [block]))
 
     def test_sparse_grid_table_is_kept_with_review_warning(self):
         rows = [
@@ -316,7 +417,8 @@ class TableRegressionTests(unittest.TestCase):
             P.Stats(),
             [],
         )
-        self.assertEqual(blocks[0].kind, "heading")
+        self.assertEqual(blocks[0].kind, "table")
+        self.assertTrue(P.is_heading(blocks[0]))
         self.assertEqual(
             (blocks[0].marker_raw, blocks[0].marker_normalized), ("1", "1.")
         )
@@ -356,7 +458,8 @@ class TableRegressionTests(unittest.TestCase):
         page = TablePage([[(70, 0, 150, 45)]], (70, 0, 150, 45))
         warnings = []
         blocks, remaining = P.extract_tables(
-            page, [source] + fields, P.Stats(), warnings
+            page, [source] + fields, P.Stats(), warnings,
+            [{"kind": "approval_grid", "bbox": [0, 0, 150, 60], "status": "candidate"}],
         )
         self.assertFalse(blocks)
         self.assertEqual(remaining, [source] + fields)
@@ -383,7 +486,7 @@ class TableRegressionTests(unittest.TestCase):
         self.assertFalse(blocks)
         self.assertEqual(remaining[0].source_text, source.source_text)
 
-    def test_sparse_cover_form_is_rejected_without_losing_lines(self):
+    def test_sparse_keyword_table_is_kept_without_confirmed_form(self):
         rows = [
             [(c * 40, r * 20, (c + 1) * 40, (r + 1) * 20) for c in range(10)]
             for r in range(5)
@@ -391,10 +494,13 @@ class TableRegressionTests(unittest.TestCase):
         page = TablePage(rows, (0, 0, 400, 100))
         source = line("등록번호", (1, 1, 35, 10))
         stats = P.Stats()
-        blocks, remaining = P.extract_tables(page, [source], stats, [])
-        self.assertFalse(blocks)
-        self.assertEqual(remaining, [source])
-        self.assertEqual(stats.ghost_grids, 1)
+        warnings = []
+        blocks, remaining = P.extract_tables(page, [source], stats, warnings)
+        self.assertEqual(blocks[0].kind, "table")
+        self.assertIn("등록번호", blocks[0].source_text)
+        self.assertFalse(blocks[0].excluded_from_retrieval)
+        self.assertEqual(stats.ghost_grids, 0)
+        self.assertIn("table_grid_sparse", {w["code"] for w in warnings})
 
     def test_real_pdf_merged_cells(self):
         with pymupdf.open() as doc:
@@ -449,90 +555,166 @@ class SpacedParagraphTests(unittest.TestCase):
         self.assertEqual(block.text, "그 외")
         self.assertNotIn("spaced_title_collapsed", block.transformations)
 
-    def test_space_restored_from_letter_spacing_is_removed(self):
+    def test_restored_spaces_are_kept_in_paragraphs(self):
         block = self.para("공개구분", [0, 1, 2, 3])
-        self.assertEqual(block.text, "공개구분")
-        self.assertIn("spaced_title_collapsed", block.transformations)
+        self.assertEqual(block.text, "공 개 구 분")
+        self.assertNotIn("spaced_title_collapsed", block.transformations)
 
-    def test_evenly_wide_spacing_is_collapsed(self):
-        self.assertEqual(self.para("파   주   시", [0, 4, 8]).text, "파주시")
+    def test_author_wide_spaces_remain_word_boundaries(self):
+        for source, starts, expected in [
+            ("그  외", [0, 3], "그 외"),
+            ("7  개", [0, 3], "7 개"),
+            ("파   주   시", [0, 4, 8], "파 주 시"),
+        ]:
+            with self.subTest(source=source):
+                block = self.para(source, starts)
+                self.assertEqual(block.text, expected)
+                self.assertEqual(block.source_text, source)
+                self.assertNotIn("spaced_title_collapsed", block.transformations)
 
-    def test_only_restored_spaces_are_removed_when_mixed(self):
-        self.assertEqual(
-            self.para("( 경영기획과)", [0, 2, 3, 4, 5, 6, 7]).text, "( 경영기획과)"
-        )
-        self.assertEqual(self.para("전 입 일   년", [0, 2, 4, 8]).text, "전 입 일 년")
+    def test_confirmed_heading_can_collapse_letter_spacing(self):
+        block = P.classify(line("1. 개 요"), 0, 1)
+        self.assertEqual((block.kind, block.text), ("heading", "개요"))
 
 
 class ApprovalRegionTests(unittest.TestCase):
-    FIELDS = (
-        line("문서번호 1234", (0, 30, 80, 40)),
-        line("보존기간 5년", (0, 50, 80, 60)),
-    )
+    def document(self, *, signature=True, title_above=False, page_number=0, border=True):
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        for y in (80, 120, 160) if border else (80, 120):
+            page.draw_line((50, y), (200, y))
+        for x in (50, 110, 200):
+            page.draw_line((x, 80), (x, 160))
+        for text, x, y in [("문서번호", 60, 105), ("1234", 120, 105),
+                           ("보존기간", 60, 145), ("5년", 120, 145)]:
+            page.insert_text((x, y), text, fontname="korea", fontsize=10)
+        if signature:
+            for y in (80, 120, 160):
+                page.draw_line((220, y), (380, y))
+            for x in (220, 300, 380):
+                page.draw_line((x, 80), (x, 160))
+            for text, x, y in [("주무관", 230, 105), ("과장", 310, 105),
+                               ("홍길동", 230, 145), ("김철수", 310, 145)]:
+                page.insert_text((x, y), text, fontname="korea", fontsize=10)
+        if title_above:
+            page.insert_text((50, 65), "1. 추진 개요", fontname="korea", fontsize=16)
+        for text, x, y in [("옆의 일반 본문입니다", 410, 105),
+                           ("사업 추진을 위한 일반 본문입니다", 50, 180),
+                           ("구체적인 추진 내용을 검토합니다", 50, 200)]:
+            page.insert_text((x, y), text, fontname="korea", fontsize=10)
+        # 다른 페이지에서는 동일한 서식도 자동 제외하지 않는다.
+        if page_number:
+            doc.new_page(pno=0)
+        return doc
 
-    def test_extension_keeps_approval_lines(self):
-        rows = [
-            line("홍길동", (0, 70, 40, 80)),
-            line("2019. 06. 07.", (0, 85, 80, 98), size=13),
-            line("협", (0, 100, 13, 113), size=13),
-        ]
-        region = P.detect_approval_region([*self.FIELDS, *rows])
-        self.assertEqual(region, (30, 113))
+    def parse(self, **options):
+        with self.document(**options) as doc, tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "approval.pdf"
+            doc.save(path)
+            return P.parse_pdf(path)
 
-    def test_extension_stops_at_larger_title(self):
-        title = line("2020년 사업 결과보고", (0, 70, 200, 88), size=18)
-        body = line("내용", (0, 90, 40, 100))
-        region = P.detect_approval_region([*self.FIELDS, title, body])
-        self.assertEqual(region, (30, 60))
+    def test_confirmed_form_excludes_only_its_rectangles(self):
+        doc, markdown, _ = self.parse()
+        approvals = [b for b in doc["blocks"] if b["kind"] == "approval"]
+        self.assertEqual(len(approvals), 2)
+        self.assertTrue(all(b["excluded_from_retrieval"] for b in approvals))
+        for text in ("옆의 일반 본문입니다", "사업 추진을 위한 일반 본문입니다",
+                     "구체적인 추진 내용을 검토합니다"):
+            block = next(b for b in doc["blocks"] if text in b["text"])
+            self.assertNotEqual(block["kind"], "approval")
+            self.assertIn(text, markdown)
+        self.assertFalse(doc["warnings"])
 
-    def test_extension_stops_at_body_marker(self):
-        body = [line("1. 추진 개요", (0, 70, 80, 80)), line("내용", (0, 85, 40, 95))]
-        region = P.detect_approval_region([*self.FIELDS, *body])
-        self.assertEqual(region, (30, 60))
+    def test_metadata_table_without_signatures_stays_in_markdown(self):
+        doc, markdown, _ = self.parse(signature=False)
+        self.assertFalse(any(b["kind"] == "approval" for b in doc["blocks"]))
+        self.assertIn("문서번호", markdown)
+        self.assertIn("approval_like_table", {w["code"] for w in doc["warnings"]})
 
-    def test_lines_above_bottom_approval_are_body(self):
-        title = line("2020년 사업 결과보고", (0, 100, 200, 115), size=15)
-        fields = [
-            line("문서번호 1234", (0, 600, 80, 610)),
-            line("보존기간 5년", (0, 620, 80, 630)),
-        ]
-        pages = P.DocumentPages(
-            [{"page": 1}], [""], [[title] + fields], [[]], [[]], [841.0]
-        )
-        blocks = P._assemble_blocks(pages, P.Stats())
-        kinds = {block.text: block.kind for block in blocks}
-        self.assertNotEqual(kinds["2020년 사업 결과보고"], "approval")
-        self.assertEqual(kinds["문서번호 1234"], "approval")
+    def test_form_after_body_start_is_not_excluded(self):
+        doc, markdown, _ = self.parse(title_above=True)
+        self.assertFalse(any(b["kind"] == "approval" for b in doc["blocks"]))
+        self.assertIn("문서번호", markdown)
 
-    def approval_table(self, top):
-        page = TablePage(
-            [
-                [(0, top, 50, top + 20), (50, top, 100, top + 20)],
-                [(0, top + 20, 50, top + 40), (50, top + 20, 100, top + 40)],
-            ],
-            (0, top, 100, top + 40),
-        )
-        lines = [
-            line("문서번호", (5, top + 5, 45, top + 15)),
-            line("1234", (55, top + 5, 95, top + 15)),
-            line("보존기간", (5, top + 25, 45, top + 35)),
-            line("5년", (55, top + 25, 95, top + 35)),
-        ]
-        warnings = []
-        blocks, _ = P.extract_tables(page, lines, P.Stats(), warnings)
-        return blocks[0], warnings
+    def test_unmarked_body_before_form_prevents_exclusion(self):
+        with self.document() as pdf, tempfile.TemporaryDirectory() as root:
+            pdf[0].insert_text((50, 65), "일반 본문을 설명하는 표입니다", fontname="korea", fontsize=10)
+            path = Path(root) / "body-first.pdf"
+            pdf.save(path)
+            doc, markdown, _ = P.parse_pdf(path)
+        self.assertFalse(any(b["kind"] == "approval" for b in doc["blocks"]))
+        self.assertIn("문서번호", markdown)
+        self.assertIn("일반 본문을 설명하는 표입니다", markdown)
 
-    def test_approval_table_on_cover_top_is_excluded(self):
-        block, warnings = self.approval_table(10)
-        self.assertEqual(block.kind, "approval")
-        self.assertTrue(block.excluded_from_retrieval)
-        self.assertFalse(warnings)
+    def test_form_on_second_page_is_not_excluded(self):
+        doc, markdown, _ = self.parse(page_number=1)
+        self.assertFalse(any(b["kind"] == "approval" for b in doc["blocks"]))
+        self.assertIn("문서번호", markdown)
 
-    def test_approval_like_body_table_stays_table_with_warning(self):
-        block, warnings = self.approval_table(600)
-        self.assertEqual(block.kind, "table")
-        self.assertFalse(block.excluded_from_retrieval)
-        self.assertEqual(warnings[0]["code"], "approval_like_table")
+    def test_incomplete_form_keeps_text_with_warning(self):
+        doc, markdown, _ = self.parse(border=False)
+        self.assertFalse(any(b["kind"] == "approval" for b in doc["blocks"]))
+        self.assertIn("문서번호", markdown)
+        self.assertIn("approval_region_ambiguous", {w["code"] for w in doc["warnings"]})
+
+    def test_unruled_fields_do_not_swallow_unmarked_body(self):
+        with pymupdf.open() as pdf, tempfile.TemporaryDirectory() as root:
+            page = pdf.new_page()
+            for text, y in [("문서번호 1234", 40), ("보존기간 5년", 60),
+                            ("사업 추진을 위한 일반 본문입니다", 80),
+                            ("구체적인 추진 내용을 검토합니다", 100)]:
+                page.insert_text((50, y), text, fontname="korea", fontsize=10)
+            path = Path(root) / "unruled.pdf"
+            pdf.save(path)
+            doc, markdown, _ = P.parse_pdf(path)
+        self.assertFalse(any(b["kind"] == "approval" for b in doc["blocks"]))
+        self.assertIn("구체적인 추진 내용을 검토합니다", markdown)
+        self.assertIn("approval_region_ambiguous", {w["code"] for w in doc["warnings"]})
+
+    def test_keyword_explanation_is_not_a_field_label(self):
+        with self.document(signature=False) as pdf:
+            page = pdf[0]
+            lines = P.extract_lines(page, P.Stats())
+            page.add_redact_annot((50, 80, 110, 160))
+            page.apply_redactions()
+            page.insert_text((55, 105), "문서번호 및 보존기간", fontname="korea", fontsize=6)
+            regions = P.detect_approval_regions(page, P.extract_lines(page, P.Stats()), [])
+            self.assertFalse(regions)
+
+    def attached_body(self, *, hole=False):
+        with self.document() as pdf, tempfile.TemporaryDirectory() as root:
+            page = pdf[0]
+            page.add_redact_annot((0, 161, 595, 842))
+            page.apply_redactions()
+            right = 110 if hole else 200
+            for x in (50, right):
+                page.draw_line((x, 160), (x, 200))
+            page.draw_line((50, 200), (right, 200))
+            quote = "경계밖본문검증" if hole else "본문보존검증문장"
+            page.insert_text((115 if hole else 55, 185), quote, fontname="korea", fontsize=10)
+            path = Path(root) / "attached.pdf"
+            pdf.save(path)
+            return P.parse_pdf(path), quote
+
+    def test_body_cell_attached_to_metadata_grid_is_preserved(self):
+        (doc, markdown, _), quote = self.attached_body()
+        block = next(b for b in doc["blocks"] if quote in b["text"])
+        self.assertEqual(block["kind"], "table")
+        self.assertFalse(block.get("excluded_from_retrieval"))
+        self.assertIn(quote, markdown)
+        self.assertIn("approval_geometry_ambiguous", {w["code"] for w in doc["warnings"]})
+
+    def test_glyphs_in_grid_hole_are_preserved_after_failed_recovery(self):
+        (doc, markdown, _), quote = self.attached_body(hole=True)
+        block = next(b for b in doc["blocks"] if quote in b["text"])
+        self.assertNotEqual(block["kind"], "approval")
+        self.assertFalse(block.get("excluded_from_retrieval"))
+        self.assertIn(quote, markdown)
+        self.assertIn("approval_geometry_ambiguous", {w["code"] for w in doc["warnings"]})
+        uncertain = [r for r in doc["layout_regions"] if r["kind"] == "approval_grid" and r["status"] == "needs_review"]
+        for region in uncertain:
+            self.assertFalse(any(b["kind"] == "approval" and P.center_in(b["bbox"], region["bbox"])
+                                 for b in doc["blocks"]))
 
 
 class ContractAndIntegrationTests(unittest.TestCase):

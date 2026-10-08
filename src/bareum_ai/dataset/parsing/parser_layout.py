@@ -145,50 +145,13 @@ def page_rect(page):
     return page.rect * page.derotation_matrix
 
 
-def inspect_page(page, approval_bottom=None, approval_padding=30):
+def inspect_page(page, approval_regions=None):
+    """결재 영역은 파서가 서식을 확인한 사각형만 사용한다."""
     drawings = page.get_drawings()
     chars = glyphs(page)
     rect = page_rect(page)
     cells = ruled_cells(drawings)
-    regions = []
-    if approval_bottom is not None:
-        for group in components(
-            [
-                c
-                for c in cells
-                if c[1] < approval_bottom and c[3] <= approval_bottom + approval_padding
-            ]
-        ):
-            if len(group) < 4:
-                continue
-            area = bounds(group)
-            picked = [c for c in chars if contains(area, center(c["bbox"]))]
-            if not picked:
-                continue
-            if any(
-                sum(contains(box, center(c["bbox"])) for box in group) != 1
-                for c in picked
-                if c["text"].strip()
-            ):
-                continue
-            nodes = [
-                {
-                    "bbox": box,
-                    "text": glyph_text(
-                        [c for c in picked if contains(box, center(c["bbox"]))]
-                    ),
-                }
-                for box in sorted(group, key=lambda b: (b[1], b[0]))
-            ]
-            regions.append(
-                {
-                    "kind": "approval_grid",
-                    "bbox": area,
-                    "nodes": nodes,
-                    "evidence": "closed_ruled_cells",
-                    "status": "geometry_recovered",
-                }
-            )
+    regions = list(approval_regions or [])
     boxes = []
     for box in [g[0] for g in components(cells) if len(g) == 1]:
         if any(contains(r["bbox"], center(box)) for r in regions):

@@ -24,15 +24,14 @@ from . import parser_layout
 pymupdf.no_recommend_layout()
 
 PARSER_NAME = "public-report-parser"
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.2.0"
 
 SPACE_GAP_RATIO = 0.15
 DUP_OVERLAP_RATIO = 0.8
 WRAP_MAX_SHORTFALL = 0.6
 WRAP_MAX_VGAP = 1.2
-CELL_ROOM_RATIO = 1.5
-# 공백 없이 줄이 끊길 수 있는 자리. 이 뒤에서 바뀐 줄은 다음 단어가 통째로 넘어간 것이다.
-CELL_BREAK_AFTER = "∼~〜/-–‧·"
+CELL_LINEBREAK_POLICY = "preserve-boundaries-v1"
+CELL_RANGE_END_RE = re.compile(r"\d[\d\s.년월일시분초:/-]*[∼~〜]$")
 ROW_OVERLAP_RATIO = 0.5
 EDGE_BAND = 0.10
 EDGE_BAND_WIDE = 0.12
@@ -52,9 +51,11 @@ GLYPH_DRAWING_RATIO = 1.5
 GRADIENT_STRIP_MAX_WIDTH = 15.0
 GRADIENT_STRIP_MIN = 10
 APPROVAL_MIN_HITS = 2
-APPROVAL_GAP = 30.0
 APPROVAL_TOP_RATIO = 0.5
-APPROVAL_TITLE_SIZE_RATIO = 1.5
+APPROVAL_ROLE_RE = re.compile(
+    r"^(?:기안자?|결재자?|담당자?|주무관|협조자?|전결|대결|"
+    r"[가-힣0-9]{0,15}(?:팀장|과장|국장|실장|소장|부시장|시장|군수|구청장))$"
+)
 SHADOW_MAX_LUMA = 0.70
 SCAN_COVER_RATIO = 0.7
 OUTLINE_MIN_DRAWINGS = 50
@@ -156,6 +157,7 @@ class Block:
     cells: list[dict] = field(default_factory=list)
     layout_node_id: str | None = None
     source_fragments: list[dict] = field(default_factory=list)
+    heading_hint: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -354,24 +356,46 @@ def drop_shadows(lines: list[Line], stats: Stats) -> list[Line]:
 
 
 def cell_text(
-    cell_lines: list[Line], stats: Stats, cell_box: tuple | None = None
+    cell_lines: list[Line], stats: Stats, decisions: list[dict] | None = None,
 ) -> tuple[str, str]:
-    """셀 안에서도 줄바꿈으로 끊긴 어절을 이어 붙인다. (정규화, 원문) 순으로 돌려준다.
+    """셀 줄 경계는 공백으로 보존한다. 좌표로 어절 연결을 추측하지 않는다.
 
-    가장 긴 줄만 기준으로 삼으면 첫 줄이 가장 긴 '10월 초순 / 10월 내' 같은 칸이 한 줄로
-    붙는다. 그래서 셀 오른쪽 테두리에서 왼쪽 여백만큼 뺀 위치까지 다음 줄 첫 글자가 들어갈
-    자리가 있었으면 이어 붙이지 않는다.
+    숫자 범위의 명시적 연결 기호와 세로 한 글자 표기는 별도로 복원한다.
+    공백 없는 원문 줄의 해석 및 세로 복원은 검수 대상으로 기록한다.
+    source/text_offset은 각각 셀 source_rows/rows 문자열 기준이다.
     """
-    cell_right = None
-    if cell_box and cell_lines:
-        padding = max(0.0, min(text_left(line) for line in cell_lines) - cell_box[0])
-        cell_right = cell_box[2] - padding
-    merged = merge_wrapped(cell_lines, Stats(), cell_right=cell_right)
-    stats.merged_lines += len(cell_lines) - len(merged)
-    return (
-        " ".join(line.text for line in merged).strip(),
-        "\n".join(line.source_text for line in cell_lines),
+    if not cell_lines:
+        return "", ""
+    decisions = decisions if decisions is not None else []
+    stacked = (
+        len(cell_lines) > 1
+        and all(len(line.text) == 1 and line.text.isalnum() for line in cell_lines)
+        and max(text_left(line) for line in cell_lines)
+        - min(text_left(line) for line in cell_lines) <= 3
     )
+    text = cell_lines[0].text
+    source_offset = len(cell_lines[0].source_text)
+    for prev, line in zip(cell_lines, cell_lines[1:]):
+        gap = line.bbox[1] - prev.bbox[3]
+        adjacent = (0 <= gap < prev.size * WRAP_MAX_VGAP
+                    and abs(line.size - prev.size) <= prev.size * 0.15)
+        separator, reason = " ", "boundary_preserved"
+        needs_review = gap >= 0 and not prev.trailing_space
+        if prev.trailing_space:
+            reason = "explicit_space"
+        elif (adjacent and CELL_RANGE_END_RE.search(prev.text.rstrip())
+              and re.match(r"^\d", line.text) and not starts_new_block(line.text)):
+            separator, reason, needs_review = "", "numeric_range", False
+        elif stacked and adjacent:
+            separator, reason, needs_review = "", "vertical_run", True
+        decisions.append({"source_offset": source_offset, "text_offset": len(text),
+                          "separator": separator, "reason": reason,
+                          "needs_review": needs_review})
+        text += separator + line.text
+        source_offset += 1 + len(line.source_text)
+        if not separator:
+            stats.merged_lines += 1
+    return text.strip(), "\n".join(line.source_text for line in cell_lines)
 
 
 def select_words(line: Line, indices: list[int]) -> Line:
@@ -502,6 +526,34 @@ def heading_from_grid(
     return level, head, body
 
 
+def table_heading_hint(grid: list[list[str]], larger_than_body: bool) -> dict:
+    """원래 표는 보존하고, 표제어와 부호/크기 근거가 있는 제목 해석만 확정한다."""
+    candidate = heading_from_grid(grid, True)
+    if not candidate:
+        return {}
+    level, marker, text = candidate
+    label = re.sub(r"\s+", "", text)
+    label_evidence = bool(re.search(
+        r"(?:개요|배경|목적|계획|현황|내용|결과|일정|방법|방향|예산|대상|절차|범위|필요성|문제점|성과|경과)$",
+        label,
+    )) and not SENTENCE_ENDING.search(label)
+    confirmed = label_evidence and (level == 1 or larger_than_body)
+    return {"status": "confirmed" if confirmed else "needs_review",
+            "level": level, "marker": marker, "text": text,
+            "evidence": [e for e, found in (("section_label", label_evidence),
+                         ("roman_marker", level == 1), ("larger_than_body", larger_than_body)) if found]}
+
+
+def is_heading(block: Block) -> bool:
+    return block.kind == "heading" or (
+        block.kind == "table" and block.heading_hint.get("status") == "confirmed"
+    )
+
+
+def head_text(block: Block) -> str:
+    return block.heading_hint["text"] if is_heading(block) and block.heading_hint else block.text
+
+
 def body_size(lines: list[Line]) -> float:
     """페이지 본문 글자 크기. 글자 수가 가장 많은 크기다."""
     weights: dict[float, int] = {}
@@ -536,7 +588,8 @@ def _build_table_grid(
     assignments: dict[tuple[int, int], dict[int, list[int]]],
     remaining: dict[int, Line],
     stats: Stats,
-) -> tuple[list[list[str]], list[list[str]], set[str]]:
+) -> tuple[list[list[str]], list[list[str]], set[str], dict]:
+    line_breaks = {}
     grid: list[list[str]] = []
     source_grid: list[list[str]] = []
     transformations = {"table_cells_mapped"}
@@ -554,13 +607,17 @@ def _build_table_grid(
                 fragments.append(fragment)
                 transformations.update(fragment.transformations)
             fragments.sort(key=lambda entry: (round(entry.bbox[1], 1), entry.bbox[0]))
-            text, source = cell_text(fragments, stats, tuple(cell))
+            decisions = []
+            text, source = cell_text(fragments, stats, decisions)
+            if decisions:
+                line_breaks[(ri, ci)] = decisions
+                transformations.add("cell_linebreaks_recorded")
             cells.append(text)
             source_cells.append(source)
         grid.append(cells)
         source_grid.append(source_cells)
 
-    return grid, source_grid, transformations
+    return grid, source_grid, transformations, line_breaks
 
 
 def dashed_table_lines(drawings, boxes):
@@ -739,7 +796,8 @@ def split_glyph_merged_rows(
 
 
 def extract_tables(
-    page, lines: list[Line], stats: Stats, warnings: list[dict]
+    page, lines: list[Line], stats: Stats, warnings: list[dict],
+    approval_regions: list[dict] | None = None,
 ) -> tuple[list[Block], list[Line]]:
     """표 블록과, 표에 흡수되지 않고 남은 본문 라인을 돌려준다."""
     try:
@@ -783,8 +841,8 @@ def extract_tables(
 
     blocks: list[Block] = []
     remaining = dict(enumerate(lines))
-    approval_region = detect_approval_region(lines) if page.number == 0 else None
-    approval_bottom = approval_region[1] if approval_region else None
+    if approval_regions is None:
+        approval_regions = detect_approval_regions(page, lines, warnings)
 
     for table in found:
         inside = [
@@ -802,9 +860,7 @@ def extract_tables(
             for i, placed in placed_words.items()
             if placed and len(placed) < len(remaining[i].words)
         ]
-        cuts_approval = (
-            partial and approval_bottom is not None and table.bbox[3] <= approval_bottom
-        )
+        cuts_approval = partial and approval_candidate_contains(table.bbox, approval_regions)
         if len(partial) >= 3 or cuts_approval:
             warnings.append(
                 {
@@ -816,7 +872,7 @@ def extract_tables(
                 }
             )
             continue
-        grid, source_grid, transformations = _build_table_grid(
+        grid, source_grid, transformations, line_breaks = _build_table_grid(
             table, assignments, remaining, stats
         )
         if tuple(table.bbox) in recovered:
@@ -830,12 +886,7 @@ def extract_tables(
         if not compact:
             continue
 
-        cover_form = (
-            page.number == 0 and approval_hits("\n".join(" ".join(r) for r in grid)) > 0
-        )
-        if is_ghost_grid(compact) or (cover_form and is_ghost_grid(grid)):
-            stats.ghost_grids += 1
-            continue
+        # 후보 서식도 원래 표로 추출한다. 제외 여부는 전체 블록 복구·검증 후 결정한다.
 
         if (
             len(compact) == 1
@@ -859,79 +910,67 @@ def extract_tables(
 
         size = max((remaining[i].size for i in inside), default=0.0)
         body = body_size([remaining[i] for i in remaining if i not in inside])
-        heading = heading_from_grid(
+        hint = table_heading_hint(
             compact, body > 0 and size > body * TITLE_CELL_SIZE_RATIO
         )
-        if heading:
-            level, marker, text = heading
-            blocks.append(
-                Block(
-                    kind="heading",
-                    level=level,
-                    marker=marker,
-                    marker_type="roman" if level == 1 else "number",
-                    marker_raw=compact_source[0][0].strip(),
-                    marker_normalized=marker.rstrip(".") + ".",
-                    source_text="\n".join(" | ".join(row) for row in source_grid),
-                    text=text,
-                    page=page.number + 1,
-                    bbox=tuple(table.bbox),
-                    size=size,
-                    transformations=sorted(
-                        transformations | {"heading_recovered_from_table"}
-                    ),
-                )
-            )
+        if hint.get("status") == "confirmed":
+            transformations.add("table_heading_confirmed")
             stats.table_headings += 1
-        else:
-            if is_ghost_grid(grid):
-                warnings.append(
-                    {
-                        "code": "table_grid_sparse",
-                        "page": page.number + 1,
-                        "bbox": list(table.bbox),
-                        "detail": "원래 격자의 칸 대부분이 비어 있습니다. 배경 도형이 표 선으로 잡혔을 수 있어 표 구조 검수가 필요합니다.",
-                    }
-                )
-            approval_like = (
-                approval_hits("\n".join(" | ".join(r) for r in grid))
-                >= APPROVAL_MIN_HITS
+        elif hint:
+            warnings.append({"code": "table_heading_ambiguous", "page": page.number + 1,
+                             "bbox": list(table.bbox),
+                             "detail": "숫자/절 번호 모양의 셀이 있으나 제목 근거가 부족해 표 구조를 유지했습니다. 검수가 필요합니다."})
+        if is_ghost_grid(grid):
+            warnings.append(
+                {
+                    "code": "table_grid_sparse",
+                    "page": page.number + 1,
+                    "bbox": list(table.bbox),
+                    "detail": "원래 격자의 칸 대부분이 비어 있습니다. 배경 도형이 표 선으로 잡혔을 수 있어 표 구조 검수가 필요합니다.",
+                }
             )
-            # 키워드만으로는 본문 표와 구분되지 않는다. 결재란은 1쪽 상단에만 둔다.
-            is_approval = (
-                approval_like
-                and page.number == 0
-                and table.bbox[1]
-                < parser_layout.page_rect(page).height * APPROVAL_TOP_RATIO
+        approval_like = (
+            approval_hits("\n".join(" | ".join(r) for r in grid))
+            >= APPROVAL_MIN_HITS
+        )
+        if approval_like and not approval_candidate_contains(table.bbox, approval_regions):
+            warnings.append(
+                {
+                    "code": "approval_like_table",
+                    "page": page.number + 1,
+                    "bbox": list(table.bbox),
+                    "detail": "결재란 키워드가 있지만 결재 서식과 영역이 확인되지 않아 일반 표로 유지했습니다. 검수가 필요합니다.",
+                }
             )
-            if approval_like and not is_approval:
-                warnings.append(
-                    {
-                        "code": "approval_like_table",
-                        "page": page.number + 1,
-                        "bbox": list(table.bbox),
-                        "detail": "결재란 키워드가 있지만 1쪽 상단이 아니어서 일반 표로 유지했습니다. 결재란인지 검수가 필요합니다.",
-                    }
-                )
-            blocks.append(
-                Block(
-                    kind="approval" if is_approval else "table",
-                    source_text="\n".join(" | ".join(row) for row in source_grid),
-                    text="\n".join(" | ".join(row) for row in grid),
-                    page=page.number + 1,
-                    bbox=tuple(table.bbox),
-                    size=size,
-                    rows=grid,
-                    source_rows=source_grid,
-                    cells=geometry,
-                    excluded_from_retrieval=is_approval,
-                    transformations=sorted(transformations),
-                )
+        for cell in geometry:
+            decisions = line_breaks.get((cell["row"], cell["col"]), [])
+            if decisions:
+                cell["line_breaks"] = decisions
+            if any(d["needs_review"] for d in decisions):
+                warnings.append({"code": "table_cell_linebreak_review", "page": page.number + 1,
+                                 "bbox": list(cell["bbox"]), "row": cell["row"], "col": cell["col"],
+                                 "detail": "셀의 원문 줄 경계를 보존했습니다. 어절 중간 줄바꿈 또는 세로 표기의 해석을 검수하세요."})
+        blocks.append(
+            Block(
+                kind="table",
+                source_text="\n".join(" | ".join(row) for row in source_grid),
+                text="\n".join(" | ".join(row) for row in grid),
+                page=page.number + 1,
+                bbox=tuple(table.bbox),
+                size=size,
+                rows=grid,
+                source_rows=source_grid,
+                cells=geometry,
+                heading_hint=hint,
+                level=hint["level"] if hint.get("status") == "confirmed" else None,
+                marker=hint["marker"] if hint.get("status") == "confirmed" else None,
+                marker_raw=compact_source[0][0].strip() if hint.get("status") == "confirmed" else None,
+                marker_normalized=hint["marker"].rstrip(".") + "." if hint.get("status") == "confirmed" else None,
+                marker_type=("roman" if hint["level"] == 1 else "number") if hint.get("status") == "confirmed" else None,
+                transformations=sorted(transformations),
             )
-            if is_approval:
-                stats.approval_blocks += 1
-            else:
-                stats.tables += 1
+        )
+        stats.tables += 1
 
         for i, placed in placed_words.items():
             if not placed:
@@ -992,38 +1031,114 @@ def detect_running_elements(
     return result
 
 
-def starts_body_after_approval(line: Line, field_size: float) -> bool:
-    """결재란 아래에서 제목이나 본문이 시작되는 줄인지 본다.
-
-    '협', '조'처럼 크게 쓴 한 글자 칸 이름은 제목으로 보지 않는다. 결재란의 날짜·공개구분 값은
-    항목명보다 1.4배까지 크게 쓰이므로 제목 기준은 그보다 크게 둔다.
-    """
-    return starts_new_block(line.text) or (
-        len(line.text.replace(" ", "")) >= TITLE_MIN_CHARS
-        and line.size > field_size * APPROVAL_TITLE_SIZE_RATIO
+def approval_candidate_contains(box, regions: list[dict]) -> bool:
+    """표를 자르는 후보 경계 검사용. 검색 제외 판정에는 사용하지 않는다."""
+    return any(
+        r.get("kind") == "approval_grid" and r.get("status") == "candidate"
+        and parser_layout.contains(r["bbox"], (box[0], box[1]), 1)
+        and parser_layout.contains(r["bbox"], (box[2], box[3]), 1)
+        for r in regions
     )
 
 
-def detect_approval_region(lines: list[Line]) -> tuple[float, float] | None:
-    """표지의 기안문 결재란이 차지하는 y 범위(위, 아래)를 돌려준다."""
-    fields = [entry for entry in lines if APPROVAL_FIELD_RE.search(entry.text)]
-    if (
-        len({APPROVAL_FIELD_RE.search(entry.text).group(0) for entry in fields})
-        < APPROVAL_MIN_HITS
-    ):
-        return None
-    top = min(entry.bbox[1] for entry in fields)
-    bottom = max(entry.bbox[3] for entry in fields)
-    field_size = max(entry.size for entry in fields)
-    for line in sorted(lines, key=lambda entry: entry.bbox[1]):
-        if line.bbox[1] < bottom:
+def detect_approval_regions(page, lines: list[Line], warnings: list[dict]) -> list[dict]:
+    """항목명/값 셀과 결재자 서식이 함께 있는 후보 격자를 찾는다.
+
+    자간 정리는 판정용 셀 문자열에만 적용한다. 줄 간격으로 범위를 확장하지 않고,
+    나란한 메타데이터 격자와 결재자 격자도 각각의 사각형을 유지한다.
+    여기서는 제외하지 않으며 후보/불확실 상태를 최종 블록 검증으로 넘긴다.
+    """
+    if page.number != 0:
+        return []
+    fields = [l for l in lines if APPROVAL_FIELD_RE.search(re.sub(r"\s+", "", l.text))]
+    if not fields:
+        return []
+    try:
+        chars = parser_layout.glyphs(page)
+        groups = parser_layout.components(parser_layout.ruled_cells(page.get_drawings()))
+    except (AttributeError, ValueError):
+        groups, chars = [], []
+    candidates = []
+    for group in groups:
+        if len(group) < 4:
             continue
-        if line.bbox[1] - bottom > APPROVAL_GAP or starts_body_after_approval(
-            line, field_size
+        nodes = [
+            {"bbox": box, "text": parser_layout.glyph_text([
+                c for c in chars if parser_layout.contains(box, parser_layout.center(c["bbox"]))
+            ])}
+            for box in sorted(group, key=lambda b: (b[1], b[0]))
+        ]
+        paired = set()
+        roles = set()
+        supported = set()
+        for n in nodes:
+            text = re.sub(r"\s+", "", n["text"])
+            if APPROVAL_ROLE_RE.fullmatch(text):
+                roles.add(text)
+            values = [other for other in nodes if (
+                abs(other["bbox"][0] - n["bbox"][2]) <= 1
+                and abs(other["bbox"][1] - n["bbox"][1]) <= 1
+                and abs(other["bbox"][3] - n["bbox"][3]) <= 1
+            ) and other is not n]
+            if APPROVAL_FIELD_RE.fullmatch(text) and values:
+                paired.add(text)
+                supported.update(id(other) for other in [n, *values])
+            if APPROVAL_ROLE_RE.fullmatch(text):
+                supported.add(id(n))
+                # 서명 값은 역할 셀 바로 아래의 같은 열 한 셀만 인정한다.
+                supported.update(id(other) for other in nodes
+                    if abs(other["bbox"][1] - n["bbox"][3]) <= 1
+                    and abs(other["bbox"][0] - n["bbox"][0]) <= 1
+                    and abs(other["bbox"][2] - n["bbox"][2]) <= 1)
+        area = parser_layout.bounds(group)
+        recoverable = all(
+            sum(parser_layout.contains(box, parser_layout.center(c["bbox"])) for box in group) == 1
+            for c in chars if c["text"].strip()
+            and parser_layout.contains(area, parser_layout.center(c["bbox"]))
+        )
+        candidates.append({"kind": "approval_grid", "bbox": area, "nodes": nodes,
+                           "recoverable": recoverable,
+                           "evidence": "field_value_cells_and_signature_grid",
+                           "status": "candidate" if recoverable and all(
+                               not n["text"].strip() or id(n) in supported for n in nodes
+                           ) else "needs_review", "fields": paired, "roles": roles})
+    rect = parser_layout.page_rect(page)
+    confirmed = set()
+    for i, meta in enumerate(candidates):
+        if len(meta["fields"]) < APPROVAL_MIN_HITS or meta["bbox"][1] >= rect.height * APPROVAL_TOP_RATIO:
+            continue
+        # 본문이 먼저 시작된 표는 보존한다. 부호/큰 글자가 없는 일반 문장도 경계로 본다.
+        # 기관명, 저장/출력 머리말과 독립된 결재 항목명은 본문 경계에서 제외한다.
+        if any(
+            l.bbox[3] <= meta["bbox"][1]
+            and (starts_new_block(l.text) or (
+                len(l.text.replace(" ", "")) >= TITLE_MIN_CHARS
+                and not ORG_NAME_RE.fullmatch(l.text.replace(" ", ""))
+                and not APPROVAL_FIELD_RE.fullmatch(re.sub(r"\s+", "", l.text))
+                and not APPROVAL_ROLE_RE.fullmatch(re.sub(r"\s+", "", l.text))
+                and not re.match(r"^(?:저장|출력)\s*[:：]", l.text)
+                and not re.fullmatch(r"[\d\s./:–—-]+", l.text)
+            ))
+            for l in lines
         ):
-            break
-        bottom = max(bottom, line.bbox[3])
-    return top, bottom
+            continue
+        for j, signature in enumerate(candidates):
+            if len(signature["roles"]) < 2:
+                continue
+            a, b = meta["bbox"], signature["bbox"]
+            gap = max(0, max(a[0], b[0]) - min(a[2], b[2]))
+            if y_overlap(a, b) >= 0.5 and gap <= rect.width * 0.08:
+                confirmed.update((i, j))
+    regions = [{k: v for k, v in candidates[i].items() if k not in ("fields", "roles")}
+               for i in sorted(confirmed)]
+    uncertain = [l for l in fields if not approval_candidate_contains(l.bbox, regions)]
+    if uncertain:
+        box = uncertain[0].bbox
+        for l in uncertain[1:]:
+            box = union(box, l.bbox)
+        warnings.append({"code": "approval_region_ambiguous", "page": 1, "bbox": list(box),
+                         "detail": "결재란 관련 글자가 있지만 서식과 영역이 확인되지 않아 본문을 유지했습니다. 검수가 필요합니다."})
+    return regions
 
 
 def join_lines(
@@ -1167,19 +1282,10 @@ def continues_smaller_list_text(prev: Line, line: Line) -> bool:
     )
 
 
-def first_char_width(line: Line) -> float:
-    """줄 첫 글자의 폭. 어절 폭을 글자 수로 나눠 어림한다."""
-    if not line.words or not line.words[0].text:
-        return line.size
-    word = line.words[0]
-    return (word.bbox[2] - word.bbox[0]) / len(word.text)
-
-
 def merge_wrapped(
     lines: list[Line],
     stats: Stats,
     barriers: list[tuple] | None = None,
-    cell_right: float | None = None,
 ) -> list[Line]:
     if not lines:
         return []
@@ -1201,16 +1307,6 @@ def merge_wrapped(
         if paragraphs:
             prev = paragraphs[-1]
             shortfall = right_edge - prev.bbox[2]
-            # 셀 안에서는 다음 줄 첫 글자가 셀 끝 남은 자리에 들어갈 수 있었으면 직접 바꾼 줄로 본다.
-            # 다만 '1.∼' / '12. 15.'처럼 공백 없는 끊김 기호 뒤라면 다음 단어가 통째로 넘어간 것이다.
-            wrapped_in_cell = (
-                cell_right is None
-                or cell_right - prev.bbox[2] < first_char_width(line) * CELL_ROOM_RATIO
-                or (
-                    not prev.trailing_space
-                    and prev.text.rstrip()[-1:] in tuple(CELL_BREAK_AFTER)
-                )
-            )
             vgap = line.bbox[1] - prev.bbox[3]
             smaller_continuation = continues_smaller_list_text(prev, line)
             blocked = any(
@@ -1222,7 +1318,6 @@ def merge_wrapped(
             )
             if (
                 shortfall < prev.size * WRAP_MAX_SHORTFALL
-                and wrapped_in_cell
                 and 0 <= vgap < prev.size * WRAP_MAX_VGAP
                 and abs(line.bbox[0] - prev.bbox[0]) <= prev.size * 2
                 and (
@@ -1263,34 +1358,6 @@ def collapse_spaced(text: str) -> tuple[str, bool]:
     if len(tokens) >= 2 and all(len(t) == 1 for t in tokens):
         return "".join(tokens), True
     return text, False
-
-
-def collapse_spaced_line(line: Line) -> tuple[str, bool]:
-    """문단 줄에서는 원문에 없던 공백과 고르게 넓힌 공백만 걷어낸다.
-
-    '공 개 구 분'(원문 '공개구분', 자간 때문에 넣은 공백)과 '파   주   시'는 붙이지만,
-    작성자가 한 칸 띄운 '그 외', '7 개'는 그대로 둔다. 제목처럼 보여도 문단에서는
-    원문 띄어쓰기를 바꾸지 않는다.
-    """
-    tokens = line.text.split()
-    words = line.words
-    if (
-        len(tokens) < 2
-        or not all(len(token) == 1 for token in tokens)
-        or [word.text for word in words] != tokens
-        or any(w.source_start is None or w.source_end is None for w in words)
-    ):
-        return line.text, False
-    gaps = [
-        line.source_text[a.source_end : b.source_start]
-        for a, b in itertools.pairwise(words)
-    ]
-    wide = all(len(gap) >= 2 for gap in gaps if gap)
-    text = tokens[0] + "".join(
-        token if not gap or wide else " " + token
-        for token, gap in zip(tokens[1:], gaps)
-    )
-    return text, text != line.text
 
 
 def text_left(line: Line) -> float:
@@ -1378,14 +1445,8 @@ def classify(
             **common,
         )
 
-    text, collapsed = (
-        collapse_spaced_line(line) if len(line.text) < 30 else (line.text, False)
-    )
-    transformations = list(line.transformations)
-    if collapsed:
-        add_transformation(transformations, "spaced_title_collapsed")
     return Block(
-        kind="para", text=text, transformations=sorted(set(transformations)), **common
+        kind="para", text=line.text, transformations=sorted(set(line.transformations)), **common
     )
 
 
@@ -1580,7 +1641,7 @@ def assign_hierarchy(blocks: list[Block], document_id: str) -> None:
     for block in blocks:
         if block.kind in EXCLUDED_KINDS:
             continue
-        if block.kind in STACKED_KINDS and block.level:
+        if (block.kind in STACKED_KINDS or is_heading(block)) and block.level:
             for level in [entry for entry in stack if entry >= block.level]:
                 del stack[level]
             ancestors = [entry for entry in stack if entry < block.level]
@@ -1589,7 +1650,7 @@ def assign_hierarchy(blocks: list[Block], document_id: str) -> None:
         elif stack:
             block.parent_id = stack[max(stack)].id
         block.section_path = [
-            f"{item.marker} {item.text}".strip()
+            f"{item.marker} {head_text(item)}".strip()
             for level, item in sorted(stack.items())
             if level in HEADING_LEVELS and item is not block
         ]
@@ -1605,7 +1666,7 @@ def build_sections(blocks: list[Block], document_id: str) -> list[Section]:
     def looks_like_head(block: Block) -> bool:
         if block.kind == "attachment":
             return True
-        text = re.sub(r"\s+", "", block.text)
+        text = re.sub(r"\s+", "", head_text(block))
         if not text or len(text) > SECTION_HEAD_MAX_CHARS:
             return False
         return not SENTENCE_ENDING.search(text)
@@ -1614,7 +1675,7 @@ def build_sections(blocks: list[Block], document_id: str) -> list[Section]:
     candidates = {
         b.id
         for b in blocks
-        if b.kind in STACKED_KINDS
+        if (b.kind in STACKED_KINDS or is_heading(b))
         and b.level
         and children.get(b.id)
         and looks_like_head(b)
@@ -1639,7 +1700,7 @@ def build_sections(blocks: list[Block], document_id: str) -> list[Section]:
         b.id: Section(
             section_id=id_of[b.id],
             head_block_id=b.id,
-            head_text=b.text,
+            head_text=head_text(b),
             marker=b.marker,
             level=b.level,
             child_block_ids=[c.id for c in children.get(b.id, [])],
@@ -1838,12 +1899,8 @@ def _extract_document_pages(doc, stats: Stats, warnings: list[dict]) -> Document
             heights.append(rect.height)
             lines = extract_lines(page, stats)
             try:
-                approval_region = (
-                    detect_approval_region(lines) if page.number == 0 else None
-                )
-                regions = parser_layout.inspect_page(
-                    page, approval_region[1] if approval_region else None
-                )
+                approvals = detect_approval_regions(page, lines, warnings)
+                regions = parser_layout.inspect_page(page, approvals)
             except Exception as exc:
                 regions = []
                 warnings.append(
@@ -1864,7 +1921,7 @@ def _extract_document_pages(doc, stats: Stats, warnings: list[dict]) -> Document
                     }
                 )
                 meta["requires_vision"] = True
-            tables, body = extract_tables(page, lines, stats, warnings)
+            tables, body = extract_tables(page, lines, stats, warnings, regions)
             mark_table_underlines(page, tables)
             headings, body = recover_decorative_headings(page, body)
             tables.extend(headings)
@@ -1898,15 +1955,6 @@ def _extract_document_pages(doc, stats: Stats, warnings: list[dict]) -> Document
 
 def _assemble_blocks(pages: DocumentPages, stats: Stats) -> list[Block]:
     tagged = detect_running_elements(pages.lines, pages.heights, stats)
-
-    if pages.lines:
-        region = detect_approval_region(pages.lines[0])
-        if region is not None:
-            top, bottom = region
-            for i, line in enumerate(pages.lines[0]):
-                if top < line.bbox[3] <= bottom and (0, i) not in tagged:
-                    tagged[(0, i)] = "approval"
-                    stats.approval_blocks += 1
 
     blocks: list[Block] = []
     for page_index, lines in enumerate(pages.lines):
@@ -1942,6 +1990,11 @@ def recover_approval_blocks(
         for region in regions:
             if region["kind"] != "approval_grid":
                 continue
+            if region.get("status") not in ("candidate", "geometry_recovered"):
+                continue
+            if not region.get("recoverable", True):
+                region["status"] = "needs_review"
+                continue
             box = region["bbox"]
             members = [
                 b
@@ -1950,23 +2003,11 @@ def recover_approval_blocks(
                 and parser_layout.contains(box, parser_layout.center(b.bbox))
             ]
             if not members or any(
-                b.kind not in ("approval", "table")
+                b.kind not in ("para", "approval", "table")
                 or not parser_layout.contains(box, (b.bbox[0], b.bbox[1]), 1)
                 or not parser_layout.contains(box, (b.bbox[2], b.bbox[3]), 1)
                 for b in members
             ):
-                for block in blocks:
-                    if (
-                        block.page == page_no
-                        and block.kind == "table"
-                        and parser_layout.contains(block.bbox, (box[0], box[1]), 1)
-                        and parser_layout.contains(block.bbox, (box[2], box[3]), 1)
-                    ):
-                        block.kind = "approval"
-                        block.excluded_from_retrieval = True
-                        add_transformation(
-                            block.transformations, "approval_region_contains_grid"
-                        )
                 region["status"] = "needs_review"
                 continue
             xs = sorted({n["bbox"][i] for n in region["nodes"] for i in (0, 2)})
@@ -2004,6 +2045,7 @@ def recover_approval_blocks(
             )
             member_ids = {id(b) for b in members}
             blocks = [b for b in blocks if id(b) not in member_ids] + [replacement]
+            region["status"] = "geometry_recovered"
     return sorted(
         blocks, key=lambda b: (b.page, round(b.bbox[1], 1), b.bbox[0], b.kind)
     )
@@ -2031,6 +2073,12 @@ def parse_pdf(pdf_path: Path) -> tuple[dict[str, Any], str, str]:
     pages = _extract_document_pages(doc, stats, warnings)
     blocks = _assemble_blocks(pages, stats)
     blocks = recover_approval_blocks(blocks, pages.layouts)
+    for page_no, regions in enumerate(pages.layouts, 1):
+        for region in regions:
+            if region["kind"] == "approval_grid" and region["status"] == "needs_review":
+                warnings.append({"code": "approval_geometry_ambiguous", "page": page_no,
+                                 "bbox": region["bbox"],
+                                 "detail": "결재 서식의 셀 경계가 불확실해 기존 블록을 보존했습니다. 검수가 필요합니다."})
     stats.tables = sum(b.kind == "table" for b in blocks)
     stats.approval_blocks = sum(b.kind == "approval" for b in blocks)
 
@@ -2058,6 +2106,7 @@ def parse_pdf(pdf_path: Path) -> tuple[dict[str, Any], str, str]:
             "pymupdf_version": getattr(pymupdf, "__version__", "unknown"),
             "settings": {
                 "space_gap_ratio": SPACE_GAP_RATIO,
+                "cell_linebreak_policy": CELL_LINEBREAK_POLICY,
                 "wrap_max_shortfall": WRAP_MAX_SHORTFALL,
                 "wrap_max_vgap": WRAP_MAX_VGAP,
                 "edge_band": EDGE_BAND,
@@ -2109,6 +2158,8 @@ def block_to_dict(block: Block) -> dict[str, Any]:
         "source_fragments": block.source_fragments,
     }
     data.update({k: v for k, v in optional.items() if v not in (None, [], "")})
+    if block.heading_hint:
+        data["heading_hint"] = block.heading_hint
     if block.excluded_from_retrieval:
         data["excluded_from_retrieval"] = True
     if block.requires_vision:
@@ -2214,7 +2265,9 @@ def to_markdown(title: str, blocks: list[Block], layout_regions=()) -> str:
                     out.append("\n단계는 화면상 순서이며 화살표 방향은 미확정입니다.")
                 out.append("")
             continue
-        if block.kind == "table":
+        if block.kind == "table" and is_heading(block):
+            out += [f"{'#' * ((block.level or 1) + 1)} {block.marker} {head_text(block)}", ""]
+        elif block.kind == "table":
             out += table_md(block.rows, block.cells) + [""]
         elif block.kind == "document_title":
             out += [f"**{block.text}**", ""]
