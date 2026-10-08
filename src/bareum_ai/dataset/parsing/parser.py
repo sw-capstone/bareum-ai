@@ -52,6 +52,10 @@ GRADIENT_STRIP_MAX_WIDTH = 15.0
 GRADIENT_STRIP_MIN = 10
 APPROVAL_MIN_HITS = 2
 APPROVAL_TOP_RATIO = 0.5
+APPROVAL_POLICY = "first-page-prefix-v2"
+PRINT_STAMP_RE = re.compile(
+    r"^(?:저장|출력)\s*[:：]\s*[^()/\n]+/[^()\n]+\(\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s*\)$"
+)
 APPROVAL_ROLE_RE = re.compile(
     r"^(?:기안자?|결재자?|담당자?|주무관|협조자?|전결|대결|"
     r"[가-힣0-9]{0,15}(?:팀장|과장|국장|실장|소장|부시장|시장|군수|구청장))$"
@@ -995,15 +999,14 @@ def edge_position(bbox: tuple, height: float, band: float = EDGE_BAND) -> str | 
 def detect_running_elements(
     pages: list[list[Line]], heights: list[float], stats: Stats
 ) -> dict[tuple[int, int], str]:
-    counter: dict[str, int] = {}
-    for lines, height in zip(pages, heights):
-        keys = {
-            DIGITS_RE.sub("#", entry.text)
-            for entry in lines
-            if edge_position(entry.bbox, height)
-        }
-        for key in keys:
-            counter[key] = counter.get(key, 0) + 1
+    # 같은 문구라도 다른 위치의 본문은 머리말로 합치지 않는다.
+    occurrences: dict[tuple[str, str], list[tuple[int, Line, float]]] = {}
+    for page_index, (lines, height) in enumerate(zip(pages, heights)):
+        for line in lines:
+            position = edge_position(line.bbox, height)
+            if position:
+                key = (position, DIGITS_RE.sub("#", line.text))
+                occurrences.setdefault(key, []).append((page_index, line, height))
 
     threshold = max(2, math.ceil(len(pages) * RUNNING_HEAD_RATIO))
     result: dict[tuple[int, int], str] = {}
@@ -1017,6 +1020,9 @@ def detect_running_elements(
             position = edge_position(line.bbox, height)
             if not position:
                 continue
+            if PRINT_STAMP_RE.fullmatch(line.text):
+                result[(page_index, line_index)] = position
+                continue
             if PAGE_NUM_RE.match(line.text):
                 if any(
                     other is not line
@@ -1025,7 +1031,15 @@ def detect_running_elements(
                 ):
                     continue
                 result[(page_index, line_index)] = "page_number"
-            elif counter.get(DIGITS_RE.sub("#", line.text), 0) >= threshold:
+                continue
+            same_position = {
+                p for p, other, other_height in occurrences.get(
+                    (position, DIGITS_RE.sub("#", line.text)), []
+                )
+                if abs(other.bbox[0] - line.bbox[0]) <= 6
+                and abs(other.bbox[1] / other_height - line.bbox[1] / height) <= 0.01
+            }
+            if len(same_position) >= threshold:
                 result[(page_index, line_index)] = position
     stats.running_elements = len(result)
     return result
@@ -1041,18 +1055,47 @@ def approval_candidate_contains(box, regions: list[dict]) -> bool:
     )
 
 
-def detect_approval_regions(page, lines: list[Line], warnings: list[dict]) -> list[dict]:
-    """항목명/값 셀과 결재자 서식이 함께 있는 후보 격자를 찾는다.
+def approval_short_label(text: str) -> bool:
+    """미등록 항목명도 후보로 받되 문장·숫자·장 제목은 항목명으로 쓰지 않는다."""
+    compact = re.sub(r"\s+", "", text)
+    return bool(re.fullmatch(r"[가-힣A-Za-z·/]{2,10}", compact)) and not (
+        SENTENCE_ENDING.search(compact) or starts_new_block(text)
+        or re.search(r"(?:개요|계획|배경|목적|내용|결과)$", compact)
+    )
 
-    자간 정리는 판정용 셀 문자열에만 적용한다. 줄 간격으로 범위를 확장하지 않고,
-    나란한 메타데이터 격자와 결재자 격자도 각각의 사각형을 유지한다.
-    여기서는 제외하지 않으며 후보/불확실 상태를 최종 블록 검증으로 넘긴다.
+
+def approval_value(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text)
+    return len(compact) <= 40 and not (
+        SENTENCE_ENDING.search(compact) or starts_new_block(text)
+        or re.search(r"(?:합니다|됩니다|입니다|한다|이다|바랍니다)[.!?。]?$", compact)
+    )
+
+
+def approval_neighbors(node, nodes, direction):
+    a = node["bbox"]
+    return [other for other in nodes if other is not node and (
+        (direction == "right" and abs(other["bbox"][0] - a[2]) <= 1
+         and abs(other["bbox"][1] - a[1]) <= 1
+         and abs(other["bbox"][3] - a[3]) <= 1)
+        or (direction == "below" and abs(other["bbox"][1] - a[3]) <= 1
+            and abs(other["bbox"][0] - a[0]) <= 1
+            and abs(other["bbox"][2] - a[2]) <= 1)
+    )]
+
+
+def detect_approval_regions(
+    page, lines: list[Line], warnings: list[dict], running_line_ids: set[int] | None = None,
+) -> list[dict]:
+    """첫 페이지의 본문 전 서식만 후보로 삼고, 각 표 경계 안에서만 제외한다.
+
+    항목 단어집은 보조 근거다. 미등록 항목도 반복된 항목/값 배치로 후보가 된다.
+    직위 수나 서명 방향을 강제하지 않으며, 미확인 줄/본문을 만나면 멈춘다.
     """
     if page.number != 0:
         return []
+    rect = parser_layout.page_rect(page)
     fields = [l for l in lines if APPROVAL_FIELD_RE.search(re.sub(r"\s+", "", l.text))]
-    if not fields:
-        return []
     try:
         chars = parser_layout.glyphs(page)
         groups = parser_layout.components(parser_layout.ruled_cells(page.get_drawings()))
@@ -1068,28 +1111,26 @@ def detect_approval_regions(page, lines: list[Line], warnings: list[dict]) -> li
             ])}
             for box in sorted(group, key=lambda b: (b[1], b[0]))
         ]
-        paired = set()
-        roles = set()
-        supported = set()
+        paired, known, roles, supported = set(), set(), set(), set()
         for n in nodes:
             text = re.sub(r"\s+", "", n["text"])
+            values = approval_neighbors(n, nodes, "right")
+            # 항목 열은 표 왼쪽부터 반복되는 짧은 항목명/값 쌍이다.
+            if (abs(n["bbox"][0] - min(b[0] for b in group)) <= 1
+                    and approval_short_label(n["text"]) and not APPROVAL_ROLE_RE.fullmatch(text)
+                    and values
+                    and all(approval_value(v["text"]) for v in values)):
+                paired.add(text)
+                if APPROVAL_FIELD_RE.fullmatch(text):
+                    known.add(text)
+                supported.update(id(v) for v in [n, *values])
             if APPROVAL_ROLE_RE.fullmatch(text):
                 roles.add(text)
-            values = [other for other in nodes if (
-                abs(other["bbox"][0] - n["bbox"][2]) <= 1
-                and abs(other["bbox"][1] - n["bbox"][1]) <= 1
-                and abs(other["bbox"][3] - n["bbox"][3]) <= 1
-            ) and other is not n]
-            if APPROVAL_FIELD_RE.fullmatch(text) and values:
-                paired.add(text)
-                supported.update(id(other) for other in [n, *values])
-            if APPROVAL_ROLE_RE.fullmatch(text):
                 supported.add(id(n))
-                # 서명 값은 역할 셀 바로 아래의 같은 열 한 셀만 인정한다.
-                supported.update(id(other) for other in nodes
-                    if abs(other["bbox"][1] - n["bbox"][3]) <= 1
-                    and abs(other["bbox"][0] - n["bbox"][0]) <= 1
-                    and abs(other["bbox"][2] - n["bbox"][2]) <= 1)
+                # 가로/세로 서명 배치를 모두 허용하되 설명 문장은 받아들이지 않는다.
+                for direction in ("right", "below"):
+                    supported.update(id(v) for v in approval_neighbors(n, nodes, direction)
+                                     if approval_value(v["text"]))
         area = parser_layout.bounds(group)
         recoverable = all(
             sum(parser_layout.contains(box, parser_layout.center(c["bbox"])) for box in group) == 1
@@ -1098,46 +1139,75 @@ def detect_approval_regions(page, lines: list[Line], warnings: list[dict]) -> li
         )
         candidates.append({"kind": "approval_grid", "bbox": area, "nodes": nodes,
                            "recoverable": recoverable,
-                           "evidence": "field_value_cells_and_signature_grid",
+                           "evidence": "first_page_prefix_and_form_layout",
                            "status": "candidate" if recoverable and all(
                                not n["text"].strip() or id(n) in supported for n in nodes
-                           ) else "needs_review", "fields": paired, "roles": roles})
-    rect = parser_layout.page_rect(page)
-    confirmed = set()
+                           ) else "needs_review", "fields": known, "pairs": paired, "roles": roles})
+
+    # 확인된 머리말은 본문 경계에서 제외하되 표 안의 반복 항목명은 제외하지 않는다.
+    cells = [box for group in groups for box in group]
+    running_line_ids = running_line_ids or set()
+    header_ids = {id(l) for l in lines
+                  if (id(l) in running_line_ids or (
+                      edge_position(l.bbox, rect.height) == "header"
+                      and PRINT_STAMP_RE.fullmatch(l.text)))
+                  and not any(center_in(l.bbox, box) for box in cells)}
+    # 기관명이 한 글자씩 분리되어 추출된 경우에도 판정용으로만 모아 본다.
+    # 원문 블록이나 공백은 바꾸지 않으며 기관명 자체를 검색 제외하지 않는다.
+    organization_ids = {id(l) for l in lines
+                        if ORG_NAME_RE.fullmatch(re.sub(r"\s+", "", l.text))}
+    single_letters = [l for l in lines if len(l.text) == 1 and l.text.isalpha()]
+    for line in single_letters:
+        row = sorted((other for other in single_letters
+                      if abs(other.bbox[1] - line.bbox[1]) <= 2
+                      and abs(other.size - line.size) <= 1), key=lambda l: l.bbox[0])
+        if ORG_NAME_RE.fullmatch("".join(l.text for l in row)):
+            organization_ids.update(id(l) for l in row)
+    regions = []
+    selected = set()
     for i, meta in enumerate(candidates):
-        if len(meta["fields"]) < APPROVAL_MIN_HITS or meta["bbox"][1] >= rect.height * APPROVAL_TOP_RATIO:
+        if (i in selected or len(meta["pairs"]) < 2 or meta["bbox"][1] >= rect.height * APPROVAL_TOP_RATIO):
             continue
-        # 본문이 먼저 시작된 표는 보존한다. 부호/큰 글자가 없는 일반 문장도 경계로 본다.
-        # 기관명, 저장/출력 머리말과 독립된 결재 항목명은 본문 경계에서 제외한다.
-        if any(
-            l.bbox[3] <= meta["bbox"][1]
-            and (starts_new_block(l.text) or (
-                len(l.text.replace(" ", "")) >= TITLE_MIN_CHARS
-                and not ORG_NAME_RE.fullmatch(l.text.replace(" ", ""))
-                and not APPROVAL_FIELD_RE.fullmatch(re.sub(r"\s+", "", l.text))
-                and not APPROVAL_ROLE_RE.fullmatch(re.sub(r"\s+", "", l.text))
-                and not re.match(r"^(?:저장|출력)\s*[:：]", l.text)
-                and not re.fullmatch(r"[\d\s./:–—-]+", l.text)
-            ))
-            for l in lines
-        ):
-            continue
+        signatures = []
         for j, signature in enumerate(candidates):
-            if len(signature["roles"]) < 2:
+            if not signature["roles"]:
                 continue
             a, b = meta["bbox"], signature["bbox"]
             gap = max(0, max(a[0], b[0]) - min(a[2], b[2]))
             if y_overlap(a, b) >= 0.5 and gap <= rect.width * 0.08:
-                confirmed.update((i, j))
-    regions = [{k: v for k, v in candidates[i].items() if k not in ("fields", "roles")}
-               for i in sorted(confirmed)]
+                signatures.append(j)
+        # 알려진 항목이 없더라도 세 행 이상의 항목/값 배치와 결재 영역이면 허용한다.
+        evidence = bool(signatures) and (
+            len(meta["fields"]) >= APPROVAL_MIN_HITS or len(meta["pairs"]) >= 3
+        )
+        cluster = [meta, *(candidates[j] for j in signatures if j != i)]
+        envelope = parser_layout.bounds([r["bbox"] for r in cluster])
+        # 같은 가로 범위에서 서식 밖의 첫 글자를 만나면 더 아래로 진행하지 않는다.
+        # 작은 글자/숫자도 의미 없는 문구라고 가정하지 않는다.
+        outside = [l for l in lines if id(l) not in header_ids
+                   and not (id(l) in organization_ids and l.bbox[3] <= envelope[1])
+                   and not (envelope[1] <= l.bbox[1] and l.bbox[3] <= envelope[3]
+                            and APPROVAL_FIELD_RE.fullmatch(re.sub(r"\s+", "", l.text)))
+                   and l.bbox[0] < envelope[2] and l.bbox[2] > envelope[0]
+                   and not any(center_in(l.bbox, r["bbox"]) for r in cluster)]
+        body_start = min((l.bbox[1] for l in outside), default=rect.height)
+        if body_start < envelope[3] - 1:
+            evidence = False
+        if not evidence:
+            warnings.append({"code": "approval_region_ambiguous", "page": 1,
+                             "bbox": list(meta["bbox"]),
+                             "detail": "문서 첫머리 서식 후보지만 결재 근거 또는 본문 경계가 불확실해 내용을 유지했습니다."})
+            continue
+        for j in {i, *signatures}:
+            if j not in selected:
+                regions.append({k: v for k, v in candidates[j].items()
+                                if k not in ("fields", "pairs", "roles")})
+                selected.add(j)
     uncertain = [l for l in fields if not approval_candidate_contains(l.bbox, regions)]
     if uncertain:
-        box = uncertain[0].bbox
-        for l in uncertain[1:]:
-            box = union(box, l.bbox)
-        warnings.append({"code": "approval_region_ambiguous", "page": 1, "bbox": list(box),
-                         "detail": "결재란 관련 글자가 있지만 서식과 영역이 확인되지 않아 본문을 유지했습니다. 검수가 필요합니다."})
+        warnings.append({"code": "approval_region_ambiguous", "page": 1,
+                         "bbox": parser_layout.bounds([l.bbox for l in uncertain]),
+                         "detail": "결재란 관련 글자가 있지만 서식과 본문 경계가 확인되지 않아 내용을 유지했습니다. 검수가 필요합니다."})
     return regions
 
 
@@ -1384,7 +1454,10 @@ def classify(
         return Block(
             kind=forced_kind,
             text=line.text,
-            transformations=list(line.transformations),
+            transformations=[*line.transformations,
+                             "page_number_at_edge" if forced_kind == "page_number" else
+                             "print_stamp_at_edge" if PRINT_STAMP_RE.fullmatch(line.text) else
+                             "repeated_text_at_same_edge_position"],
             excluded_from_retrieval=True,
             **common,
         )
@@ -1887,6 +1960,9 @@ def _extract_document_pages(doc, stats: Stats, warnings: list[dict]) -> Document
     layouts: list[list[dict]] = []
 
     try:
+        raw_lines = [extract_lines(page, stats) for page in doc]
+        raw_heights = [parser_layout.page_rect(page).height for page in doc]
+        running = detect_running_elements(raw_lines, raw_heights, stats)
         for page in doc:
             raw_pages.append(page.get_text())
             rect = parser_layout.page_rect(page)
@@ -1897,9 +1973,10 @@ def _extract_document_pages(doc, stats: Stats, warnings: list[dict]) -> Document
             }
             pages_meta.append(meta)
             heights.append(rect.height)
-            lines = extract_lines(page, stats)
+            lines = raw_lines[page.number]
+            running_ids = {id(lines[i]) for (p, i) in running if p == page.number}
             try:
-                approvals = detect_approval_regions(page, lines, warnings)
+                approvals = detect_approval_regions(page, lines, warnings, running_ids)
                 regions = parser_layout.inspect_page(page, approvals)
             except Exception as exc:
                 regions = []
@@ -1940,6 +2017,15 @@ def _extract_document_pages(doc, stats: Stats, warnings: list[dict]) -> Document
                 meta["vector_shapes"] = shapes
                 meta["requires_vision"] = True
                 stats.vector_pages += 1
+            if page.number == 0:
+                normal_size = body_size(body)
+                for line in body:
+                    if (id(line) not in running_ids
+                            and edge_position(line.bbox, rect.height) == "header"
+                            and line.size < normal_size * 0.9):
+                        warnings.append({"code": "header_ambiguous", "page": 1,
+                                         "bbox": list(line.bbox),
+                                         "detail": "첫 페이지 상단의 작은 문구지만 머리말 근거가 없어 본문에 유지했습니다."})
             page_lines.append(body)
             page_tables.append(tables)
             page_figures.append(figures)
@@ -2107,6 +2193,7 @@ def parse_pdf(pdf_path: Path) -> tuple[dict[str, Any], str, str]:
             "settings": {
                 "space_gap_ratio": SPACE_GAP_RATIO,
                 "cell_linebreak_policy": CELL_LINEBREAK_POLICY,
+                "approval_policy": APPROVAL_POLICY,
                 "wrap_max_shortfall": WRAP_MAX_SHORTFALL,
                 "wrap_max_vgap": WRAP_MAX_VGAP,
                 "edge_band": EDGE_BAND,

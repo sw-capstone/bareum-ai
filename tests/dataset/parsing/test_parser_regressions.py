@@ -717,6 +717,158 @@ class ApprovalRegionTests(unittest.TestCase):
                                  for b in doc["blocks"]))
 
 
+    def parse_pdf_document(self, pdf):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'form.pdf'
+            pdf.save(path)
+            return P.parse_pdf(path)
+
+    def replace_metadata(self, pdf, labels):
+        page = pdf[0]
+        page.add_redact_annot((49, 79, 201, 161))
+        page.apply_redactions()
+        # 세 행의 미등록 항목도 같은 항목/값 구조로 제공한다.
+        for y in (80, 105, 130, 160):
+            page.draw_line((50, y), (200, y))
+        for x in (50, 110, 200):
+            page.draw_line((x, 80), (x, 160))
+        for label, value, y in zip(labels, ('1234', '2026', '비공개'), (98, 123, 148)):
+            page.insert_text((55, y), label, fontname='korea', fontsize=8)
+            page.insert_text((120, y), value, fontname='korea', fontsize=8)
+
+    def test_horizontal_signatures_are_supported(self):
+        with self.document() as pdf:
+            page = pdf[0]
+            page.add_redact_annot((221, 81, 379, 159))
+            page.apply_redactions()
+            for text, x, y in [('주무관', 230, 105), ('홍길동', 310, 105),
+                               ('과장', 230, 145), ('김철수', 310, 145)]:
+                page.insert_text((x, y), text, fontname='korea', fontsize=10)
+            doc, markdown, _ = self.parse_pdf_document(pdf)
+        self.assertEqual(sum(b['kind'] == 'approval' for b in doc['blocks']), 2)
+        self.assertNotIn('홍길동', markdown)
+        self.assertIn('사업 추진을 위한 일반 본문입니다', markdown)
+
+    def test_single_role_and_blank_signature_columns_like_review_image(self):
+        with pymupdf.open() as pdf:
+            page = pdf.new_page()
+            for y in (80, 115, 150, 185, 220, 255):
+                page.draw_line((40, y), (200, y))
+            for x in (40, 110, 200):
+                page.draw_line((x, 80), (x, 255))
+            for label, y in zip(('등록번호', '등록일자', '결재일자', '공개구분', '전화번호'),
+                                (103, 138, 173, 208, 243)):
+                page.insert_text((45, y), label, fontname='korea', fontsize=10)
+            page.insert_text((120, 208), '비공개(5)', fontname='korea', fontsize=10)
+            for y in (80, 110, 170, 255):
+                page.draw_line((220, y), (520, y))
+            for x in (220, 270, 520):
+                page.draw_line((x, 80), (x, 255))
+            for x in (320, 370, 420, 470):
+                page.draw_line((x, 80), (x, 170))
+            page.insert_text((227, 102), '주무관', fontname='korea', fontsize=10)
+            page.insert_text((227, 215), '협조자', fontname='korea', fontsize=10)
+            page.insert_text((40, 300), '1. 사업 개요', fontname='korea', fontsize=16)
+            page.insert_text((40, 330), '반드시 보존할 본문입니다', fontname='korea', fontsize=10)
+            doc, markdown, _ = self.parse_pdf_document(pdf)
+        approvals = [b for b in doc['blocks'] if b['kind'] == 'approval']
+        self.assertEqual(len(approvals), 2)
+        self.assertIn('전화번호', '\n'.join(b['source_text'] for b in approvals))
+        self.assertNotIn('등록번호', markdown)
+        self.assertIn('반드시 보존할 본문입니다', markdown)
+        self.assertTrue(all(b['bbox'][3] <= 255 for b in approvals))
+
+    def test_unknown_field_names_use_structure_with_approval_evidence(self):
+        with self.document() as pdf:
+            self.replace_metadata(pdf, ('관리코드', '작성시점', '배포등급'))
+            doc, markdown, _ = self.parse_pdf_document(pdf)
+        self.assertEqual(sum(b['kind'] == 'approval' for b in doc['blocks']), 2)
+        self.assertNotIn('관리코드', markdown)
+        self.assertIn('구체적인 추진 내용을 검토합니다', markdown)
+
+    def test_unknown_form_without_approval_evidence_is_kept_and_flagged(self):
+        with self.document(signature=False) as pdf:
+            self.replace_metadata(pdf, ('관리코드', '작성시점', '배포등급'))
+            doc, markdown, _ = self.parse_pdf_document(pdf)
+        self.assertFalse(any(b['kind'] == 'approval' for b in doc['blocks']))
+        self.assertIn('관리코드', markdown)
+        self.assertIn('approval_region_ambiguous', {w['code'] for w in doc['warnings']})
+
+    def test_print_stamp_is_separate_header_before_approval(self):
+        stamp = '저장 : 사용자 / 부서 (2026-10-08 10:20:30)'
+        with self.document() as pdf:
+            pdf[0].insert_text((50, 30), stamp, fontname='korea', fontsize=6)
+            doc, markdown, _ = self.parse_pdf_document(pdf)
+        self.assertEqual(sum(b['kind'] == 'approval' for b in doc['blocks']), 2)
+        block = next(b for b in doc['blocks'] if stamp in b['source_text'])
+        self.assertEqual(block['kind'], 'header')
+        self.assertTrue(block['excluded_from_retrieval'])
+        self.assertIn('print_stamp_at_edge', block['transformations'])
+        self.assertNotIn(stamp, markdown)
+
+    def test_small_unknown_prefix_is_preserved_and_stops_approval(self):
+        for text in ('중요한 안내 문구입니다', '안내', '저장 : 본문 보관 방법',
+                     '저장 : 본문 보관 방법 (2026-10-08 10:20:30)'):
+            with self.subTest(text=text), self.document() as pdf:
+                pdf[0].insert_text((50, 30), text, fontname='korea', fontsize=6)
+                doc, markdown, _ = self.parse_pdf_document(pdf)
+            self.assertFalse(any(b['kind'] == 'approval' for b in doc['blocks']))
+            self.assertIn(text, markdown)
+            self.assertIn('header_ambiguous', {w['code'] for w in doc['warnings']})
+
+    def test_repeated_header_does_not_block_approval(self):
+        with self.document() as pdf:
+            pdf[0].insert_text((50, 30), '같은 위치의 머리말', fontname='korea', fontsize=6)
+            second = pdf.new_page()
+            second.insert_text((50, 30), '같은 위치의 머리말', fontname='korea', fontsize=6)
+            second.insert_text((50, 180), '둘째 페이지 본문입니다', fontname='korea', fontsize=10)
+            doc, markdown, _ = self.parse_pdf_document(pdf)
+        self.assertEqual(sum(b['kind'] == 'approval' for b in doc['blocks']), 2)
+        headers = [b for b in doc['blocks'] if b['kind'] == 'header']
+        self.assertEqual(len(headers), 2)
+        self.assertTrue(all('repeated_text_at_same_edge_position' in b['transformations'] for b in headers))
+        self.assertNotIn('같은 위치의 머리말', markdown)
+
+    def test_same_text_at_different_positions_is_not_a_header(self):
+        with self.document() as pdf:
+            pdf[0].insert_text((50, 30), '중요한 안내 문구', fontname='korea', fontsize=6)
+            second = pdf.new_page()
+            second.insert_text((300, 60), '중요한 안내 문구', fontname='korea', fontsize=6)
+            doc, markdown, _ = self.parse_pdf_document(pdf)
+        self.assertFalse(any(b['kind'] == 'header' for b in doc['blocks']))
+        self.assertIn('중요한 안내 문구', markdown)
+
+    def test_split_organization_name_is_kept_without_blocking_approval(self):
+        with self.document() as pdf:
+            for x, text in ((50, '파'), (100, '주'), (150, '시')):
+                pdf[0].insert_text((x, 55), text, fontname='korea', fontsize=16)
+            doc, markdown, _ = self.parse_pdf_document(pdf)
+        self.assertEqual(sum(b['kind'] == 'approval' for b in doc['blocks']), 2)
+        org = [b for b in doc['blocks'] if '파' in b['source_text']]
+        self.assertTrue(org)
+        self.assertTrue(all(not b.get('excluded_from_retrieval') for b in org))
+
+    def test_repeated_field_label_outside_grid_is_preserved(self):
+        with self.document() as pdf:
+            # 왼쪽 표 옆 빈 공간의 항목명은 본문이 아니지만 제외 범위에도 넣지 않는다.
+            pdf[0].insert_text((202, 150), '전결', fontname='korea', fontsize=6)
+            doc, markdown, _ = self.parse_pdf_document(pdf)
+        self.assertEqual(sum(b['kind'] == 'approval' for b in doc['blocks']), 2)
+        self.assertIn('전결', markdown)
+        self.assertIn('approval_region_ambiguous', {w['code'] for w in doc['warnings']})
+
+    def test_sentence_in_signature_cell_is_not_excluded(self):
+        with self.document() as pdf:
+            page = pdf[0]
+            page.add_redact_annot((221, 121, 299, 159))
+            page.apply_redactions()
+            page.insert_text((225, 145), '보존할 본문입니다.', fontname='korea', fontsize=6)
+            doc, markdown, _ = self.parse_pdf_document(pdf)
+        block = next(b for b in doc['blocks'] if '보존할 본문입니다.' in b['source_text'])
+        self.assertFalse(block.get('excluded_from_retrieval'))
+        self.assertIn('보존할 본문입니다.', markdown)
+
+
 class ContractAndIntegrationTests(unittest.TestCase):
     def test_invented_marker_is_a_failure(self):
         report = checks.Report()
