@@ -67,50 +67,56 @@ def policy_path_error(root: Path, value: object) -> str | None:
     return None
 
 
-def validate_policy(root: Path, policy: object, *, require_metadata: bool = False) -> Finding | None:
-    def error(field: str, message: str) -> Finding:
-        return Finding("HAR-POLICY-001", "error", f"harness/policy.json#{field}", f"{field}: {message}")
+def validate_policy(root: Path, policy: object, *, require_metadata: bool = False) -> list[Finding]:
+    findings: list[Finding] = []
+
+    def error(field: str, message: str) -> None:
+        findings.append(Finding("HAR-POLICY-001", "error", f"harness/policy.json#{field}", f"{field}: {message}"))
 
     if not isinstance(policy, dict):
-        return error("policy", "JSON 객체여야 합니다.")
+        error("policy", "JSON 객체여야 합니다.")
+        return findings
     checks = policy.get("checks", {})
     if not isinstance(checks, dict):
-        return error("checks", "검사 이름과 true 또는 false 값으로 구성된 객체여야 합니다.")
-    unknown = set(checks) - CHECK_NAMES
-    if unknown:
-        return error("checks", f"알 수 없는 검사 이름: {', '.join(sorted(map(str, unknown)))}")
-    for name, value in checks.items():
-        if not isinstance(value, bool):
-            return error(f"checks.{name}", "true 또는 false여야 합니다.")
+        error("checks", "검사 이름과 true 또는 false 값으로 구성된 객체여야 합니다.")
+    else:
+        unknown = set(checks) - CHECK_NAMES
+        if unknown:
+            error("checks", f"알 수 없는 검사 이름: {', '.join(sorted(map(str, unknown)))}")
+        for name, value in checks.items():
+            if not isinstance(value, bool):
+                error(f"checks.{name}", "true 또는 false여야 합니다.")
     if require_metadata:
         for field in ("version", "required_paths", "checks"):
             if field not in policy:
-                return error(field, "필수 항목이 없습니다.")
+                error(field, "필수 항목이 없습니다.")
     if "version" in policy:
         version = policy["version"]
         if not isinstance(version, str) or not version.strip():
-            return error("version", "비어 있지 않은 문자열이어야 합니다.")
+            error("version", "비어 있지 않은 문자열이어야 합니다.")
     allowed = {"version", "required_paths", "checks", "autofix"}
     unknown_fields = set(policy) - allowed
     if unknown_fields:
-        return error("policy", f"알 수 없는 항목: {', '.join(sorted(map(str, unknown_fields)))}")
+        error("policy", f"알 수 없는 항목: {', '.join(sorted(map(str, unknown_fields)))}")
     paths = policy.get("required_paths", [])
     if not isinstance(paths, list):
-        return error("required_paths", "경로 문자열 배열이어야 합니다.")
-    for index, value in enumerate(paths):
-        message = policy_path_error(root, value)
-        if message:
-            return error(f"required_paths[{index}]", message)
+        error("required_paths", "경로 문자열 배열이어야 합니다.")
+    else:
+        for index, value in enumerate(paths):
+            message = policy_path_error(root, value)
+            if message:
+                error(f"required_paths[{index}]", message)
     if "autofix" in policy:
         autofix = policy["autofix"]
         if not isinstance(autofix, dict):
-            return error("autofix", "객체여야 합니다.")
-        for field, value in autofix.items():
-            if field not in {"enabled", "semantic_changes"}:
-                return error("autofix", f"알 수 없는 항목: {field}")
-            if not isinstance(value, bool):
-                return error(f"autofix.{field}", "true 또는 false여야 합니다.")
-    return None
+            error("autofix", "객체여야 합니다.")
+        else:
+            for field, value in autofix.items():
+                if field not in {"enabled", "semantic_changes"}:
+                    error("autofix", f"알 수 없는 항목: {field}")
+                elif not isinstance(value, bool):
+                    error(f"autofix.{field}", "true 또는 false여야 합니다.")
+    return findings
 
 
 def check_required_paths(root: Path, policy: dict[str, object]) -> list[Finding]:
@@ -211,9 +217,9 @@ def check_secret_patterns(root: Path) -> list[Finding]:
 
 
 def evaluate_checks(root: Path, policy: dict[str, object]) -> tuple[list[Finding], list[CheckExecution]]:
-    policy_finding = validate_policy(root, policy)
-    if policy_finding:
-        return [policy_finding], [CheckExecution("policy", "failed", 1)]
+    policy_findings = validate_policy(root, policy)
+    if policy_findings:
+        return policy_findings, [CheckExecution("policy", "failed", len(policy_findings))]
     enabled = policy.get("checks", {})
 
     checks = (

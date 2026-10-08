@@ -19,6 +19,39 @@ def valid_policy():
 
 
 class PolicyValidationTest(unittest.TestCase):
+    def test_independent_policy_errors_are_collected(self):
+        policy = {
+            **valid_policy(),
+            "version": "",
+            "checks": {"typo": False, "json_syntax": "true", "required_paths": 1},
+            "required_paths": ["../outside.md", None],
+            "unknown": False,
+            "autofix": {"enabled": "false", "semantic_changes": None, "typo": False},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            findings, executions = evaluate_checks(Path(directory), policy)
+        expected_fields = {
+            "checks", "checks.json_syntax", "checks.required_paths", "version", "policy",
+            "required_paths[0]", "required_paths[1]",
+            "autofix.enabled", "autofix.semantic_changes", "autofix",
+        }
+        self.assertEqual({item.path for item in findings},
+                         {f"harness/policy.json#{field}" for field in expected_fields})
+        self.assertEqual(len(findings), len(expected_fields))
+        self.assertTrue(all(item.check_id == "HAR-POLICY-001" for item in findings))
+        self.assertEqual([item.to_dict() for item in executions],
+                         [{"name": "policy", "status": "failed", "finding_count": len(findings)}])
+
+    def test_invalid_parent_types_do_not_stop_other_fields(self):
+        policy = {**valid_policy(), "version": "", "checks": [], "required_paths": None, "autofix": []}
+        with tempfile.TemporaryDirectory() as directory:
+            findings, executions = evaluate_checks(Path(directory), policy)
+        self.assertEqual({item.path for item in findings},
+                         {f"harness/policy.json#{field}"
+                          for field in ("version", "checks", "required_paths", "autofix")})
+        self.assertEqual(len(findings), 4)
+        self.assertEqual(executions[0].finding_count, 4)
+
     def load(self, root, policy):
         (root / "harness").mkdir(exist_ok=True)
         (root / "harness/policy.json").write_text(json.dumps(policy), encoding="utf-8")
@@ -48,10 +81,11 @@ class PolicyValidationTest(unittest.TestCase):
             root = Path(directory)
             for policy, message in invalid:
                 with self.subTest(policy=policy):
-                    loaded, finding = self.load(root, policy)
+                    loaded, findings = self.load(root, policy)
                     self.assertIsNone(loaded)
-                    self.assertEqual(finding.check_id, "HAR-POLICY-001")
-                    self.assertIn(message, finding.message)
+                    self.assertEqual(len(findings), 1)
+                    self.assertEqual(findings[0].check_id, "HAR-POLICY-001")
+                    self.assertIn(message, findings[0].message)
 
     def test_paths_stay_inside_repository(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -63,18 +97,19 @@ class PolicyValidationTest(unittest.TestCase):
             for value in ("../outside.md", str(outside), "escaped.md", "C:\\outside.md", "bad\x00path"):
                 with self.subTest(path=value):
                     policy = {**valid_policy(), "required_paths": [value]}
-                    loaded, finding = self.load(root, policy)
+                    loaded, findings = self.load(root, policy)
                     self.assertIsNone(loaded)
-                    self.assertEqual(finding.check_id, "HAR-POLICY-001")
-                    self.assertIn("required_paths[0]", finding.message)
+                    self.assertEqual(len(findings), 1)
+                    self.assertEqual(findings[0].check_id, "HAR-POLICY-001")
+                    self.assertIn("required_paths[0]", findings[0].message)
 
     def test_valid_policy_and_explicit_disabled_checks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             policy = valid_policy()
-            loaded, finding = self.load(root, policy)
+            loaded, findings = self.load(root, policy)
             self.assertEqual(loaded, policy)
-            self.assertIsNone(finding)
+            self.assertEqual(findings, [])
             findings, executions = evaluate_checks(root, loaded)
             self.assertEqual(findings, [])
             self.assertTrue(all(item.status == "disabled" for item in executions))
@@ -95,9 +130,10 @@ class PolicyValidationTest(unittest.TestCase):
                 '{"version":"1.4.0","required_paths":[],"checks":{"json_syntax":true,"json_syntax":false}}',
                 encoding="utf-8",
             )
-            loaded, finding = load_policy(root)
+            loaded, findings = load_policy(root)
             self.assertIsNone(loaded)
-            self.assertIn("중복된 정책 항목: json_syntax", finding.message)
+            self.assertEqual(len(findings), 1)
+            self.assertIn("중복된 정책 항목: json_syntax", findings[0].message)
 
     def test_invalid_unicode_policy_still_writes_readable_failure(self):
         invalid = [
@@ -126,9 +162,9 @@ class PolicyValidationTest(unittest.TestCase):
     def test_valid_unicode_strings_remain_supported(self):
         with tempfile.TemporaryDirectory() as directory:
             policy = {**valid_policy(), "required_paths": ["안내😀.md"]}
-            loaded, finding = self.load(Path(directory), policy)
+            loaded, findings = self.load(Path(directory), policy)
             self.assertEqual(loaded, policy)
-            self.assertIsNone(finding)
+            self.assertEqual(findings, [])
 
     def test_omitted_check_still_defaults_to_enabled(self):
         with tempfile.TemporaryDirectory() as directory:

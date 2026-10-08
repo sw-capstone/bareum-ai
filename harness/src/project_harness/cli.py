@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from .checks import CheckExecution, Finding, evaluate_checks, validate_policy
 
 
-def load_policy(root: Path) -> tuple[dict[str, object] | None, Finding | None]:
+def load_policy(root: Path) -> tuple[dict[str, object] | None, list[Finding]]:
     def unique_keys(pairs):
         result = {}
         for key, value in pairs:
@@ -28,11 +28,11 @@ def load_policy(root: Path) -> tuple[dict[str, object] | None, Finding | None]:
         # Escaped lone surrogates parse as JSON but cannot be written to the UTF-8 report.
         json.dumps(policy, ensure_ascii=False).encode("utf-8")
     except (OSError, UnicodeDecodeError, ValueError) as error:
-        return None, Finding("HAR-POLICY-001", "error", "harness/policy.json", f"정책 파일을 읽을 수 없습니다: {error}")
-    finding = validate_policy(root, policy, require_metadata=True)
-    if finding:
-        return None, finding
-    return policy, None
+        return None, [Finding("HAR-POLICY-001", "error", "harness/policy.json", f"정책 파일을 읽을 수 없습니다: {error}")]
+    findings = validate_policy(root, policy, require_metadata=True)
+    if findings:
+        return None, findings
+    return policy, []
 
 
 def execution_identity(root: Path) -> dict[str, object]:
@@ -111,10 +111,10 @@ def main() -> int:
     args = parser.parse_args()
     root = args.root.resolve()
     identity = execution_identity(root)
-    policy, policy_finding = load_policy(root)
-    if policy_finding:
-        findings = [policy_finding]
-        executions = [CheckExecution("policy", "failed", 1)]
+    policy, policy_findings = load_policy(root)
+    if policy_findings:
+        findings = policy_findings
+        executions = [CheckExecution("policy", "failed", len(findings))]
     else:
         assert policy is not None
         findings, executions = evaluate_checks(root, policy)

@@ -21,6 +21,34 @@ def valid_policy():
 
 
 class ReportIdentityTest(unittest.TestCase):
+    def test_policy_errors_are_all_reported_without_running_checks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy = {**valid_policy(), "version": "", "checks": {"json_syntax": "true"},
+                      "required_paths": ["../outside.md"]}
+            with patch("project_harness.cli.evaluate_checks") as evaluate:
+                code, report = self.run_cli(Path(directory), policy)
+            evaluate.assert_not_called()
+        self.assertEqual(code, 1)
+        self.assertEqual(report["summary"]["errors"], 3)
+        self.assertEqual(report["summary"]["failed"], 1)
+        self.assertEqual(report["checks"],
+                         [{"name": "policy", "status": "failed", "finding_count": 3}])
+        self.assertEqual({item["path"] for item in report["findings"]},
+                         {f"harness/policy.json#{field}"
+                          for field in ("version", "checks.json_syntax", "required_paths[0]")})
+        self.assertIn("execution", report)
+        self.assertEqual(report["policy_version"], "unavailable")
+
+    def test_all_missing_required_policy_fields_are_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            code, report = self.run_cli(Path(directory), {})
+        self.assertEqual(code, 1)
+        self.assertEqual(report["summary"]["errors"], 3)
+        self.assertEqual(report["checks"][0]["finding_count"], 3)
+        self.assertEqual({item["path"] for item in report["findings"]},
+                         {f"harness/policy.json#{field}"
+                          for field in ("version", "required_paths", "checks")})
+
     def run_cli(self, root, policy):
         (root / "harness").mkdir(exist_ok=True)
         (root / "harness/policy.json").write_text(json.dumps(policy), encoding="utf-8")
