@@ -71,3 +71,7 @@ PyMuPDF는 `dataset` 의존성 그룹으로 관리한다. 텍스트 PDF가 대�
 - [저장소 구조](docs/architecture/repository-structure.md)
 - [하네스 설계 v1.4](docs/harness/harness-v1.4.md)
 - [하네스 확장 로드맵](docs/harness/harness-file-roadmap.md)
+
+## 파싱 결과 고정
+
+[파싱 결과 고정과 라벨 연결](docs/guide/parsing-snapshots.md)에 공백/결재란 처리 정책과 고정 도구, 라벨 검증 기준을 정리했다.
