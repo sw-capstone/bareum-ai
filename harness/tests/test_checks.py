@@ -19,11 +19,11 @@ class HarnessChecksTest(unittest.TestCase):
             root = Path(directory)
             (root / "harness").mkdir()
             (root / "harness/policy.json").write_text(
-                '{"version":"1.4.0","checks":{"unknown":false}}', encoding="utf-8"
+                '{"version":"1.4.0","required_paths":[],"checks":{"unknown":false}}', encoding="utf-8"
             )
-            policy, finding = load_policy(root)
+            policy, findings = load_policy(root)
             self.assertIsNone(policy)
-            self.assertEqual(finding.check_id if finding else None, "HAR-POLICY-001")
+            self.assertEqual([item.check_id for item in findings], ["HAR-POLICY-001"])
 
     def test_required_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -46,9 +46,9 @@ class HarnessChecksTest(unittest.TestCase):
             root = Path(directory)
             (root / "harness").mkdir()
             (root / "harness/policy.json").write_text("{", encoding="utf-8")
-            policy, finding = load_policy(root)
+            policy, findings = load_policy(root)
             self.assertIsNone(policy)
-            self.assertEqual(finding.check_id if finding else None, "HAR-POLICY-001")
+            self.assertEqual([item.check_id for item in findings], ["HAR-POLICY-001"])
 
     def test_non_boolean_check_setting_is_rejected(self) -> None:
         findings, executions = evaluate_checks(Path.cwd(), {"checks": {"required_paths": None}})
