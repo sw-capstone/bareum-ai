@@ -59,6 +59,22 @@ def glyph_text(chars):
     ).strip()
 
 
+def snap_rulings(lines):
+    """기존 테두리 허용 오차(1pt) 안의 중복 선을 같은 좌표로 맞춘다.
+
+    반올림 경계 양쪽에 찍힌 같은 선이 서로 겹치는 셀 두 개를 만들지 않게 한다.
+    연쇄적으로 가까운 선까지 합치지 않도록 각 묶음의 전체 폭을 1pt로 제한한다.
+    """
+    groups = []
+    for value in sorted({line[0] for line in lines}):
+        if not groups or value - groups[-1][0] > 1:
+            groups.append([value])
+        else:
+            groups[-1].append(value)
+    positions = {value: sum(group) / len(group) for group in groups for value in group}
+    return sorted({(positions[pos], start, end) for pos, start, end in lines})
+
+
 def ruled_cells(drawings):
     horizontal = []
     vertical = []
@@ -78,8 +94,8 @@ def ruled_cells(drawings):
                     [(round(r.y0), r.x0, r.x1), (round(r.y1), r.x0, r.x1)]
                 )
                 vertical.extend([(round(r.x0), r.y0, r.y1), (round(r.x1), r.y0, r.y1)])
-    horizontal = sorted(set(horizontal))
-    vertical = sorted(set(vertical))
+    horizontal = snap_rulings(horizontal)
+    vertical = snap_rulings(vertical)
     if len(horizontal) + len(vertical) > 1200:
         raise ValueError("선분 수가 제한을 초과해 영역 복원을 보류합니다")
     ys = sorted({y for y, _, _ in horizontal})

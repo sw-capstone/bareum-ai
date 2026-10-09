@@ -52,13 +52,13 @@ GRADIENT_STRIP_MAX_WIDTH = 15.0
 GRADIENT_STRIP_MIN = 10
 APPROVAL_MIN_HITS = 2
 APPROVAL_TOP_RATIO = 0.5
-APPROVAL_POLICY = "first-page-prefix-v2"
+APPROVAL_POLICY = "first-page-prefix-v3"
 PRINT_STAMP_RE = re.compile(
     r"^(?:저장|출력)\s*[:：]\s*[^()/\n]+/[^()\n]+\(\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s*\)$"
 )
 APPROVAL_ROLE_RE = re.compile(
     r"^(?:기안자?|결재자?|담당자?|주무관|협조자?|전결|대결|"
-    r"[가-힣0-9]{0,15}(?:팀장|과장|국장|실장|소장|부시장|시장|군수|구청장))$"
+    r"[가-힣0-9]{0,15}(?:담당관|팀장|과장|국장|실장|소장|부시장|시장|군수|구청장))$"
 )
 SHADOW_MAX_LUMA = 0.70
 SCAN_COVER_RATIO = 0.7
@@ -799,6 +799,36 @@ def split_glyph_merged_rows(
     return result, fixed
 
 
+def split_background_grid(page, table, lines: list[Line], drawings: list[dict]) -> list:
+    """희소 격자 안의 별도 표를 획선으로 확인했을 때만 배경이 만든 큰 표를 해체한다.
+
+    빈칸 비율만으로 표를 버리지 않는다. 분리할 근거가 없는 표는 그대로 두고,
+    재탐색한 표 밖의 글자는 본문 처리에 남긴다.
+    """
+    if not any(d.get("type") == "f" for d in drawings):
+        return []
+    box = pymupdf.Rect(table.bbox)
+    refined = page.find_tables(clip=box, paths=drawings, strategy="lines_strict").tables
+    if len(refined) < 2 or any(
+        max(abs(a - b) for a, b in zip(t.bbox, table.bbox)) < 6 for t in refined
+    ):
+        return []
+    if any(not (parser_layout.contains(table.bbox, (t.bbox[0], t.bbox[1]), 1)
+                and parser_layout.contains(table.bbox, (t.bbox[2], t.bbox[3]), 1))
+           for t in refined):
+        return []
+    # 일부 경계가 사라졌다는 이유만으로 채택하지 않는다. 표 밖의 텍스트 줄과
+    # 서로 떨어진 표들이 함께 확인되어야 한다.
+    if any(pymupdf.Rect(a.bbox).intersects(pymupdf.Rect(b.bbox))
+           for a, b in itertools.combinations(refined, 2)):
+        return []
+    if not any(center_in(line.bbox, table.bbox)
+               and not any(pymupdf.Rect(line.bbox).intersects(pymupdf.Rect(t.bbox))
+                           for t in refined) for line in lines):
+        return []
+    return refined
+
+
 def extract_tables(
     page, lines: list[Line], stats: Stats, warnings: list[dict],
     approval_regions: list[dict] | None = None,
@@ -845,6 +875,7 @@ def extract_tables(
 
     blocks: list[Block] = []
     remaining = dict(enumerate(lines))
+    background_fixed = set()
     if approval_regions is None:
         approval_regions = detect_approval_regions(page, lines, warnings)
 
@@ -889,6 +920,26 @@ def extract_tables(
         compact, compact_source = prune_grid(grid, source_grid)
         if not compact:
             continue
+
+        if is_ghost_grid(grid) and tuple(table.bbox) not in background_fixed:
+            try:
+                refined = split_background_grid(page, table, lines, drawings)
+            except Exception:
+                # 재탐색 실패 시 기존 표와 아래의 희소 격자 경고를 유지한다.
+                refined = []
+            if refined:
+                warnings.append({"code": "table_background_grid_split", "page": page.number + 1,
+                                 "bbox": list(table.bbox),
+                                 "detail": "배경 채움을 제외한 재탐색으로 별도 표들을 복원했습니다. 표 밖 글자는 본문에 유지했으며 구조 검수가 필요합니다."})
+                for replacement in refined:
+                    if not any(max(abs(a - b) for a, b in zip(replacement.bbox, t.bbox)) < 1
+                               for t in found):
+                        found.append(replacement)
+                        background_fixed.add(tuple(replacement.bbox))
+                stats.ghost_grids += 1
+                continue
+        if tuple(table.bbox) in background_fixed:
+            transformations.add("background_grid_split")
 
         # 후보 서식도 원래 표로 추출한다. 제외 여부는 전체 블록 복구·검증 후 결정한다.
 
@@ -1174,7 +1225,10 @@ def detect_approval_regions(
                 continue
             a, b = meta["bbox"], signature["bbox"]
             gap = max(0, max(a[0], b[0]) - min(a[2], b[2]))
-            if y_overlap(a, b) >= 0.5 and gap <= rect.width * 0.08:
+            # 같은 윗선을 공유하는 두 서식은 다소 넓은 여백도 허용한다.
+            # 엇갈린 표까지 함께 묶지 않으며, 아래 본문 경계 검증도 그대로 적용한다.
+            max_gap = rect.width * (0.12 if abs(a[1] - b[1]) <= 2 else 0.08)
+            if y_overlap(a, b) >= 0.5 and gap <= max_gap:
                 signatures.append(j)
         # 알려진 항목이 없더라도 세 행 이상의 항목/값 배치와 결재 영역이면 허용한다.
         evidence = bool(signatures) and (
@@ -1825,7 +1879,7 @@ def mark_document_title(blocks: list[Block], page_height: float) -> None:
         and b.bbox[1] < page_height * TITLE_TOP_RATIO
         and TITLE_MIN_CHARS <= len(b.text) <= TITLE_MAX_CHARS
         and b.size >= floor
-        and not ORG_NAME_RE.match(b.text)
+        and not ORG_NAME_RE.fullmatch(re.sub(r"\s+", "", b.text))
     ]
     if not candidates:
         return
@@ -1839,6 +1893,8 @@ def mark_document_title(blocks: list[Block], page_height: float) -> None:
         if not 0 <= i < len(blocks):
             continue
         other = blocks[i]
+        if ORG_NAME_RE.fullmatch(re.sub(r"\s+", "", other.text)):
+            continue
         short_continuation = (
             other.kind == "para"
             and other.page == title.page
@@ -2086,12 +2142,14 @@ def recover_approval_blocks(
                 b
                 for b in blocks
                 if b.page == page_no
+                and not (b.kind == "figure" and not b.source_text)
                 and parser_layout.contains(box, parser_layout.center(b.bbox))
             ]
             if not members or any(
                 b.kind not in ("para", "approval", "table")
-                or not parser_layout.contains(box, (b.bbox[0], b.bbox[1]), 1)
-                or not parser_layout.contains(box, (b.bbox[2], b.bbox[3]), 1)
+                # find_tables의 선 위치 보정과 정수 괘선 좌표의 차이만 허용한다.
+                or not parser_layout.contains(box, (b.bbox[0], b.bbox[1]), 2 if b.kind == "table" else 1)
+                or not parser_layout.contains(box, (b.bbox[2], b.bbox[3]), 2 if b.kind == "table" else 1)
                 for b in members
             ):
                 region["status"] = "needs_review"
