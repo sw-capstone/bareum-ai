@@ -2,7 +2,6 @@
 name = "bareum-ai"
 version = "0.1.0"
 description = "바름 AI 처리 서비스"
-readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "fastapi>=0.115",
