@@ -17,6 +17,9 @@ jobs:
           python-version: "3.14"
       - run: ./scripts/run-harness.sh check
       - run: ./scripts/test-harness.sh
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - run: ./scripts/test-app.sh
       - if: always()
         uses: actions/upload-artifact@v4
         with:
