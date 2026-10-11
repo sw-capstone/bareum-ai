@@ -1,0 +1,88 @@
+name: Deploy development
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 진행 중인 배포를 새 커밋 때문에 취소하지 않습니다.
+concurrency:
+  group: deploy-development-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/develop'
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: validate
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        id: build
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: ghcr.io/sw-capstone/bareum-ai:dev-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: publish
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ap-northeast-2
+      AWS_DEFAULT_REGION: ap-northeast-2
+      AWS_PAGER: ""
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      DEPLOY_SERVICE: ai
+      DEPLOY_IMAGE: ghcr.io/sw-capstone/bareum-ai@${{ needs.publish.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check deployment configuration
+        env:
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+        run: |
+          : "${AWS_ROLE_ARN:?Set the AWS_ROLE_ARN repository variable.}"
+          : "${EC2_INSTANCE_ID:?Set the EC2_INSTANCE_ID repository variable.}"
+      - uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ap-northeast-2
+          role-session-name: deploy-ai-${{ github.run_id }}
+          role-duration-seconds: 3600
+          allowed-account-ids: "253388242909"
+      # EC2에는 기존 infra 파일과 유효한 GHCR 읽기 인증이 준비되어 있어야 합니다.
+      - name: Deploy through SSM
+        run: bash .github/scripts/deploy-via-ssm.sh
