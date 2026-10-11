@@ -1,0 +1,13 @@
+services:
+  ai:
+    image: ${SMOKE_IMAGE:?}
+    pull_policy: never
+    init: true
+    ports:
+      - "127.0.0.1:0:8000"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "3", "http://127.0.0.1:8000/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 10s

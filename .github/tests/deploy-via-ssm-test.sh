@@ -5,9 +5,8 @@ work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 mkdir "$work/bin"
 export PATH="$work/bin:$PATH" RUNNER_TEMP="$work"
-export EC2_INSTANCE_ID=i-03d7d975865752a46 DEPLOY_SERVICE=server
-DEPLOY_IMAGE="ghcr.io/sw-capstone/bareum-server@sha256:$(printf '%064d' 1)"
-export DEPLOY_IMAGE
+export EC2_INSTANCE_ID=i-03d7d975865752a46
+digest="sha256:$(printf '%064d' 1)"
 export GITHUB_STEP_SUMMARY="$work/summary" MOCK_STATE="$work/state" MOCK_CALLS="$work/calls"
 cat > "$work/bin/aws" <<'MOCK'
 #!/usr/bin/env bash
@@ -16,7 +15,8 @@ printf '%s\n' "$*" >> "$MOCK_CALLS"
 if [[ "$2" == send-command ]]; then
   [[ "$MODE" != send-fail ]] || exit 1
   while [[ "$1" != --parameters ]]; do shift; done
-  jq -e '.executionTimeout == ["1200"] and (.commands | length == 1)' <<< "$2" >/dev/null
+  jq -e --arg command "$EXPECTED_REMOTE_COMMAND" \
+    '.executionTimeout == ["1200"] and .commands == [$command]' <<< "$2" >/dev/null
   echo command-test
   exit
 fi
@@ -47,17 +47,31 @@ cat > "$work/bin/sleep" <<'MOCK'
 exit 0
 MOCK
 chmod +x "$work/bin/aws" "$work/bin/sleep"
-for mode in success eventual pending failed cancelled timedout bad-response denied send-fail; do
-  export MODE="$mode"
-  rm -f "$MOCK_STATE" "$MOCK_CALLS"
-  result=0
-  bash "$source_dir/scripts/deploy-via-ssm.sh" > "$work/output" 2>&1 || result=$?
-  case "$mode" in
-    success|eventual|pending) [[ "$result" == 0 ]] ;;
-    *) [[ "$result" != 0 ]] ;;
-  esac
-  grep -q 'AWS-RunShellScript' "$MOCK_CALLS"
-  printf 'PASS: %s\n' "$mode"
+for service in server ai; do
+  export DEPLOY_SERVICE="$service"
+  export DEPLOY_IMAGE="ghcr.io/sw-capstone/bareum-$service@$digest"
+  export EXPECTED_REMOTE_COMMAND="flock --wait 600 /opt/bareum/.actions-deploy.lock bash /opt/bareum/infra/scripts/deploy.sh $service $DEPLOY_IMAGE"
+  for mode in success eventual pending failed cancelled timedout bad-response denied send-fail; do
+    export MODE="$mode"
+    rm -f "$MOCK_STATE" "$MOCK_CALLS"
+    result=0
+    bash "$source_dir/scripts/deploy-via-ssm.sh" > "$work/output" 2>&1 || result=$?
+    case "$mode" in
+      success|eventual|pending) [[ "$result" == 0 ]] ;;
+      *) [[ "$result" != 0 ]] ;;
+    esac
+    grep -Fq -- "--instance-ids $EC2_INSTANCE_ID --document-name AWS-RunShellScript" "$MOCK_CALLS"
+    printf 'PASS: %s %s\n' "$service" "$mode"
+  done
+  other_service=server
+  if [[ "$service" == server ]]; then other_service=ai; fi
+  for rejected_image in 'ghcr.io/other/image:latest' "ghcr.io/sw-capstone/bareum-$other_service@$digest"; do
+    rm -f "$MOCK_CALLS"
+    if DEPLOY_IMAGE="$rejected_image" bash "$source_dir/scripts/deploy-via-ssm.sh" > "$work/output" 2>&1; then
+      printf 'FAIL: %s accepted image %s\n' "$service" "$rejected_image" >&2
+      exit 1
+    fi
+    [[ ! -s "$MOCK_CALLS" ]]
+    printf 'PASS: %s rejects %s before AWS calls\n' "$service" "$rejected_image"
+  done
 done
-DEPLOY_IMAGE='ghcr.io/other/image:latest' bash "$source_dir/scripts/deploy-via-ssm.sh" > "$work/output" 2>&1 && exit 1
-printf 'PASS: reject foreign image\n'

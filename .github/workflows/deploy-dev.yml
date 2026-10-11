@@ -10,29 +10,16 @@ permissions:
 
 # 진행 중인 배포를 새 커밋 때문에 취소하지 않습니다.
 concurrency:
-  group: deploy-development
+  group: deploy-development-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  check:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - run: bash .github/tests/deploy-via-ssm-test.sh
-      - uses: astral-sh/setup-uv@v10
-        with:
-          version: "0.11.32"
-          python-version: "3.14"
-      - run: ./scripts/run-harness.sh check
-      - run: ./scripts/test-harness.sh
-      - run: uv sync --locked
-      - run: uv run --no-sync pytest
+  validate:
+    if: github.ref == 'refs/heads/develop'
+    uses: ./.github/workflows/ci.yml
 
   publish:
-    needs: check
+    needs: validate
     if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
