@@ -1,0 +1,318 @@
+# =============================================================================
+# moves.yaml — 공공보고서 수사 구조(RMA) 라벨 정의
+#
+# 공공보고서 규정·품질 검증 코파일럿
+#
+# 이 파일은 '이 블록이 독자에게 무슨 일을 하는가'를 답한다.
+# '문서의 어디인가'는 sections.yaml 이 답한다. 둘은 다른 층이다.
+#
+# Swales 장르분석의 Move–Step 을 따른다.
+#   Move  달성하려는 의사소통 목적.        한 블록에 여러 기능을 기록할 수 있다.
+#   Step  해당 Move 의 세부 유형.          함께 나타난 유형은 각각 기록한다.
+#
+# Move 는 섹션이 아니다. 한 섹션 안에 여러 Move 가 들어 있는 것이 정상이다.
+#   실측: '추진배경' 구간 안에
+#     "포스트코로나로 SNS 홍보 중요성 증대"        → BACKGROUND
+#     "SNS 로 수렴된 의견은 프로그램 개선에 활용"   → ACTION
+#   표제를 상속해 둘 다 '배경'으로 만들면 여기서 의미가 사라진다.
+#
+# 표제 사전으로는 이 판정을 할 수 없다. 라벨은 LLM 이 붙인다.
+# 정의와 판정 기준의 설명 문서는 docs/specs/rma-move-step-catalog.md 다.
+# =============================================================================
+
+meta:
+  version: "1.0"
+  status: final
+  supersedes: "v0.3"
+  source: "docs/specs/rma-move-step-catalog.md"
+  consumes:
+    - "파서 출력 스키마 1.0.0 — blocks[], sections[]"
+    - "sections.yaml v1.2 — sections[].tag (문맥으로 제공, 라벨을 덮어쓰지 않는다), outlines"
+    - "rules.yaml v1.5 — annotations 와 outline_id 를 규칙별 적용 조건에 사용한다"
+  labeler: llm
+  policy:
+    id_immutable: true
+    step_requires_move: true    # Move 없이 Step 만 고를 수 없다. 모순이 구조적으로 불가능하다
+
+# -----------------------------------------------------------------------------
+# 라벨링 단위와 규약
+# -----------------------------------------------------------------------------
+labeling:
+  unit: 블록(문단·개조식 항목·제목·표)
+  input:
+    - document_id · 문서 전체 · 작성 목적(document_type)
+    - block_id · 원문 텍스트 · 부모/직전/직후 블록
+    - 그 블록을 감싸는 sections[].tag 와 head_text (참고 정보. 정답이 아니다)
+    - 표는 헤더와 행·셀 위치
+  rules:
+    - "원본 블록을 유지하고 기능별로 annotations 에 Move·Step·근거 구절을 기록한다.
+       주 기능은 핵심 주장·요청으로 정하되 우열이 없으면 primary_annotation_id 를 null 로 둔다.
+       첫 문장이나 첫 절을 주 기능으로 자동 선택하지 않는다"
+    - "여러 Step 이 함께 나타나면 각각 기록한다. 어느 Step 인지 불분명한 경우와 구분한다.
+       일부만 확인되면 확인된 Step 을 보존하고 step_status 를 partial 로 기록한다"
+    - "구간 이름만 있는 제목은 블록과 Section 정보를 유지하고 annotations 를 비운다.
+       Move 판정은 생략하되 구조 검사에는 사용한다. 주장이 담긴 제목은 문맥에 따라 판정한다"
+    - "활동 명칭이 언급됐다는 이유만으로 ACTION 을 추가하지 않는다. 실제 계획을 제시하는 등
+       독립적인 기능을 수행하는지 확인한다"
+    - "시제로만 갈리는 ACTION/EXECUTION · OUTCOME/EFFECT 는 문서 유형과 인접 문맥을
+       함께 본다. 공공문서의 '~함'만으로 과거·미래를 확정하지 않는다.
+       섹션 제목도 단독 결정 근거로 삼지 않는다"
+    - "표는 헤더와 행·셀 위치를 유지한 채 판정한다. 표 전체를 한 Move 로 강제하지 않는다"
+    - "복원이 깨진 입력에는 내용을 추측해 채우지 않는다. UNDETERMINED 로 남긴다"
+  evidence:
+    required: true
+    definition: 그렇게 판정한 근거가 된 원문 구절과 판정에 참고한 문맥 블록
+    check: 원문에 실제로 존재하는 문자열인지 코드로 검증한다. 구절의 실재 여부와 분류의 타당성은 별도로 확인한다
+    # 모델이 스스로 말하는 confidence 는 캘리브레이션이 보장되지 않아 게이트에 쓰지 않는다.
+    # 근거 구절의 실재 여부는 검증 가능하므로 이쪽을 쓴다.
+
+# -----------------------------------------------------------------------------
+# Move — 수사적 목적
+# -----------------------------------------------------------------------------
+moves:
+
+  BACKGROUND:
+    name: 배경
+    goal: 이 일이 지금 필요해진 외부 계기를 제시한다
+    boundary: 보고자가 바꿀 수 없는 환경·계기다. 조직이나 사업 대상의 현재 상태 기술은 STATUS. 주민 수요 증가도 문맥에 따라 역할이 달라진다
+    example: "비대면 서비스 수요가 확대되고 있음."
+
+  GROUNDS:
+    name: 근거
+    goal: 이 사업을 할 권한과 정당성을 확보한다
+    boundary: >
+      법령명이 나왔다고 근거는 아니다. 근거로 사용하는지를 본다.
+      "동물보호법 준수 여부를 지도단속할 계획이다"는 앞으로 할 활동을 설명하므로 ACTION 이다
+    consumed_by: [LAW-01, LAW-02, LAW-03, LAW-04, LAW-05]
+    # 법령 인용 표현은 문서 전역에 흩어진다. 실측 217건(75문서) 중 추진배경·근거
+    # 구간에 있는 것은 26.3%뿐이다. 섹션으로 좁히면 4분의 3을 놓친다.
+    # 추출식 — 블록에 '제N조' 또는 홑낫표 법령명(「…법·조례·규칙·규정·지침·훈령·예규」).
+    # 코퍼스 172문서를 파서 v1.5.0 으로 재파싱해 측정했다(2026-09-15).
+    # 정규식은 '법령처럼 생긴 문자열'까지만 답한다. 근거인지는 이 Move 가 답한다.
+    steps:
+      LAW:      { name: 법령 원용,   rag: true,  example: "「지방자치법」 제13조에 따라 추진함." }
+      ORDINANCE: { name: 조례 원용,   rag: true,  example: "「○○시 지원 조례」 제5조에 근거함." }
+      DIRECTIVE: { name: 지침·훈령,   rag: true,  example: "정보화업무 규정(훈령 제405호) 제13조에 따름." }
+      PLAN:     { name: 상위계획,    rag: false, example: "상위기관 개선계획에 따라 추진함." }
+      ORDER:    { name: 지시·전례,   rag: false, example: "기관장 지시사항에 따라 추진함." }
+    # rag: true 인 Step 만 법제처 조회 대상이다
+
+  PURPOSE:
+    name: 목적
+    goal: 달성하려는 상태를 선언한다
+    boundary: 이루겠다는 의지면 PURPOSE, 이를 위한 방법이면 ACTION, 생길 것이라는 예측이면 EFFECT
+    example: "처리 기간을 7일 이내로 단축하는 것을 목표로 함."
+
+  STATUS:
+    name: 현황
+    goal: 개선 대상의 현재 상태를 드러낸다
+    boundary: 부족·결함을 진단하면 PROBLEM. 이 사업의 산출이면 OUTCOME
+    example: "현재 평균 처리 기간은 14일임."
+
+  PROBLEM:
+    name: 문제
+    goal: 개입이 필요함을 입증한다
+    boundary: >
+      수치만 제시하면 STATUS. 결함 진단이 있어야 PROBLEM.
+      사업 결과를 돌아보며 한계를 판단하면 ASSESSMENT
+    steps:
+      GAP:        { name: 목표 대비 격차, example: "목표 7일 대비 두 배가 소요됨." }
+      DEFECT:     { name: 결함 사례,     example: "동일 서류를 세 부서가 중복 확인함." }
+      CONSTRAINT: { name: 제약 조건,     example: "전담 인력이 없어 병행 처리 중임." }
+      CAUSE:      { name: 원인 진단,     example: "결재 단계가 분산되어 지연이 발생함." }
+    constraint_review: >
+      CONSTRAINT 는 근거 확인 후 확정한다. 실제 사례 수·표본 충분성·DEFECT 와의 판정 구분·
+      검사 활용 차이를 확인해 유지·병합·보류를 결정한다. 파일럿 미관찰만으로 병합하지 않는다
+
+  ACTION:
+    name: 방안
+    goal: 앞으로 시행할 수단을 제안한다
+    boundary: 수행 중이거나 완료된 활동은 EXECUTION. 담당 지정·제출·협조 요청이 핵심이면 FOLLOWUP
+    consumed_by: [EXP-03]
+    example: "온라인 공동검토 기능을 도입함."
+
+  EXECUTION:
+    name: 수행
+    goal: 실제로 수행 중이거나 완료한 활동을 보고한다
+    boundary: >
+      산출물이나 변화가 초점이면 OUTCOME. 미래 예정이면 ACTION.
+      횟수·인원 등 숫자가 있어도 활동 보고일 수 있으므로 숫자의 유무로 구분하지 않는다.
+      "현재 시범 서비스를 운영 중이다"는 실제 활동의 진행 보고면 EXECUTION, 운영 상태 자체의 설명이면 STATUS
+    # 문서 유형으로 갈리지 않는다. 실측 적용률 계획 75.6% / 결과 68.9%.
+    # 시제만으로 확정하지 않고 실제 착수 여부와 인접 문맥을 확인한다
+    example: "6월에 담당자 교육을 3회 실시함."
+
+  OUTCOME:
+    name: 실적
+    goal: 확인된 산출물과 변화를 보고한다
+    boundary: 예상이면 EFFECT. 사업 이전 상태면 STATUS. 달성도·의미의 판단은 ASSESSMENT
+    consumed_by: [EXP-03]
+    example: "도입 후 처리 기간이 9일로 단축됨."
+
+  ASSESSMENT:
+    name: 평가
+    goal: 결과의 의미와 적정성을 판단한다 (회고)
+    boundary: 실적 수치 자체는 OUTCOME. 개선 방법까지 제시하면 ACTION 을 분리한다
+    consumed_by: [EXP-03]
+    steps:
+      ACHIEVEMENT: { name: 달성도 판단, example: "목표 대비 80% 수준으로 달성함." }
+      LIMITATION: { name: 한계 지적,   example: "홍보 부족으로 참여율이 저조하였음." }
+      IMPLICATION: { name: 시사점 도출, example: "분야별 강점 기관이 주도하는 편이 바람직함." }
+
+  EFFECT:
+    name: 기대 효과
+    goal: 시행 후 생길 편익을 예측해 결심을 돕는다 (전망)
+    boundary: >
+      이미 관측된 변화는 OUTCOME. 달성 의지를 건 기준은 PURPOSE.
+      숫자가 있어도 사업기간·대상 인원 같은 기본 정보라면 정량 기대 효과가 아니다
+    consumed_by: [EXP-04]
+    steps:
+      QUANTITATIVE: { name: 정량 예측, example: "연간 300시간 절감, 처리기간 14→7일 예상." }
+      QUALITATIVE:  { name: 정성 예측, example: "시민 만족도 제고 및 행정 신뢰 향상 기대." }
+    # EXP-04 는 해당 검사 범위의 정량 근거를 함께 확인한다.
+    # 한 블록에 QUANTITATIVE 가 없다는 이유만으로 위반을 확정하지 않는다.
+
+  FOLLOWUP:
+    name: 후속 조치
+    goal: 실행 조건을 걸어 결재 후 바로 착수할 수 있게 한다
+    boundary: 모든 미래 문장이 아니다. 사업 수단 자체는 ACTION. 담당·기한이 있다는 이유만으로 결정하지 않는다
+    example: "각 부서는 9월까지 담당자를 지정하기 바람."
+
+  SPEC:
+    name: 명세
+    goal: 사업을 식별할 수 있는 값을 나열한다
+    boundary: 정보 항목과 값을 제시한다. 목표·필요성·효과를 주장하는 내용과 구분한다. 표 형식만으로 SPEC 을 부여하지 않는다
+    consumed_by: [CON-04, EXP-02]
+    field:      # Step 이 아니라 속성이다. 택일이 아니고 여러 개가 함께 나온다
+      enum: [사업명, 사업기간, 대상, 장소, 규모, 사업비, 일정, 추진체계, 주최주관, 계약방식]
+      value: 추출한 값 원문
+      normalization:
+        - "예산·소요예산은 사업비로 통일하되 원문 명칭과 값을 보존한다"
+        - "일시는 행사 개최 시점이면 일정, 사업 전체 수행기간이면 사업기간으로 기록한다"
+        - "대응 항목을 정할 수 없으면 spec_field 를 null 로 두고 사유와 원문을 보존한다"
+    # EXP-02 예외는 해당 명세 구절에만 적용한다. 다른 기능이 섞인 블록 전체를 제외하지 않는다.
+    example: "사업기간: 2026. 3. 1.~2026. 8. 31."
+
+  ANNEX_REF:
+    name: 참조
+    goal: 본문 밖 자료를 가리키고 본문의 끝을 긋는다
+    # CON-03(붙임 참조 불일치)·STR-08(본문 분량 초과)은 파서의 kind=attachment 를 직접 쓴다.
+    # 이 Move 는 본문 안에서 붙임을 '가리키는' 문장을 잡는다. 둘은 다른 대상이다.
+    example: "붙임 1. 세부 운영결과 1부.  끝."
+
+# -----------------------------------------------------------------------------
+# 보조 라벨 — 분류 실패를 숨기지 않는다
+# -----------------------------------------------------------------------------
+  OTHER:
+    name: 체계 밖
+    goal: null
+    note: 내용은 이해했으나 이 체계에 자리가 없다. 사례를 모아 체계 보완을 검토한다
+    # OTHER 는 검사 제외 사유가 아니다(rules.yaml R7). 표는 작성자가 쓴 것이다.
+    # 결재란·머리말·꼬리말은 OTHER 로 붙이지 않고 파서의 kind 로 제외한다
+
+  UNDETERMINED:
+    name: 판단 불가
+    goal: null
+    note: 판정할 수 없다. 반드시 사유를 함께 남긴다
+    reasons:
+      INPUT_BROKEN:
+        정의: 파싱 손상. 표가 한 줄로 뭉개짐, 글자 깨짐, 문장 잘림
+        책임: 파서
+        조치: 파서 개선 백로그로 보낸다
+      CONTEXT_MISSING:
+        정의: 문맥 부족. 표 헤더만 있음, 한 단어 항목, 앞뒤 참조가 필요함
+        책임: 입력 구성
+        조치: 부모·인접 블록을 넓혀 재시도한다
+      AMBIGUOUS:
+        정의: 가능한 기능 중 어느 것인지 문맥으로도 결정할 수 없다. 여러 기능이 함께 확인되는 경우는 제외한다
+        책임: 체계
+        조치: 경계 사례로 수집해 정의를 보강한다
+
+# -----------------------------------------------------------------------------
+# 소비 계약 — rules.yaml 이 따른다
+# -----------------------------------------------------------------------------
+contract:
+  labeler_must: >
+    확인된 기능과 근거는 보존한다. Move 를 판정할 수 없는 부분은 UNDETERMINED 와
+    사유를 기록한다. Move 는 알지만 Step 만 불분명하면 Move 를 유지한다.
+  inspection: >
+    주 기능뿐 아니라 모든 annotations 를 검사 대상 선정에 사용한다.
+    규칙의 적용 조건을 충족하고 필요한 정보가 있을 때 실행한다.
+    필수 내용의 누락은 검사 범위를 확인한 뒤 판정한다. UNDETERMINED 만으로 모든 검사를 제외하지 않는다.
+    미확정 정보에 의존하는 검사만 제한한다(rules.yaml R7).
+  execution_status:
+    executed: 적용 조건과 필요 정보 충족. 실행 사실과 통과·위반 결과는 구분한다
+    not_applicable: 적용 대상이 아님을 확인한 경우만 사용한다
+    not_executable: 적용 여부 또는 판단 정보 부족. 구체적 사유를 기록한다. 위반도 정상 확인도 아니다
+  rag_gate: >
+    GROUNDS annotation 의 확인된 steps 중 rag: true 인 Step 의 근거를 법제처에 조회한다.
+    상위계획(PLAN)·지시(ORDER)는 법령이 아니므로 조회 대상이 아니다.
+    조회 대상 여부, 조회 성공 여부, 인용 내용의 검증 결과는 구분한다.
+    검색 실패만으로 근거 부재·오류를 확정하지 않는다.
+  CON-04: >
+    동일 사업·동일 의미의 기간인지 확인한 뒤 비교한다. 전체 사업기간과 개별 행사 일시는 다른 정보다.
+    연결 대상을 확인하지 못하면 모순으로 단정하지 않고 부족한 정보를 기록한다.
+  CON-03: >
+    본문의 붙임 참조와 파서 kind=attachment 목록을 대조한다. ANNEX_REF 기능과 블록 종류를 구분한다.
+
+# -----------------------------------------------------------------------------
+# 출력 스키마
+# -----------------------------------------------------------------------------
+output:
+  document:
+    document_id:            파서가 발급한 값 그대로
+    document_type:          "주된 작성 목적 하나. 기획 | 상황 | 결과 | 검토 | 기타. 판정 불가 시 null"
+    document_type_evidence: 작성 목적을 판단한 원문 구절
+    document_type_reason:   판정 불가 시 사유. 그 외 null
+    document_topics:        "업무 주제 목록. 현재 행사·교육, 복수 선택 가능. 해당 없음은 [], 판정 불가는 null"
+    document_topics_evidence: 주제별 근거 구절 목록
+    document_topics_reason: 판정 불가 시 사유. 그 외 null
+    outline_id:             "sections.yaml 의 outlines 키 중 적용할 목차. 없거나 선택 불가 시 null"
+    outline_reason:         목차의 적용 근거 또는 목차가 없거나 선택할 수 없는 사유
+    # 목적·주제로 목차를 자동 선택하지 않는다. 선택 조건과 우선순위는 매뉴얼 확인 후 정한다.
+    # 기존 행사교육 값은 원문을 보고 작성 목적과 업무 주제를 다시 분류한다.
+  blocks:
+    block_id:              파서가 발급한 값 그대로
+    section_id:            파서가 발급한 값 그대로
+    primary_annotation_id: 주 기능 annotation_id. 우열이 없거나 Move 판정 생략·불가 시 null
+    annotations:           # 기능별 목록. 구간 이름만 있는 제목은 빈 목록
+      - annotation_id:     블록 안에서 기능을 식별하는 값
+        move:              위 13개 + OTHER + UNDETERMINED
+        evidence_span:     해당 기능의 근거가 된 원문 구절과 위치. 표는 행·셀 위치를 포함한다
+        context_block_ids: 판정에 참고한 문맥 블록의 block_id 목록
+        steps:             # 해당 Move 에 속하며 확인된 Step 목록. 없거나 판정 불가 시 빈 목록
+          - step:          위 Move 에 정의된 Step
+            evidence_span: 이 Step 의 원문 근거 구절과 위치
+        step_status:       "determined | partial | undetermined | not_applicable"
+        step_reason:       Step 부분 판정·판정 불가 시 사유. 그 외 null
+        undetermined_reason: Move 가 UNDETERMINED 일 때 INPUT_BROKEN · CONTEXT_MISSING · AMBIGUOUS. 그 외 null
+        spec_items:        # SPEC 의 항목별 목록. 다른 Move 는 빈 목록
+          - spec_field:    SPEC.field.enum 중 통일한 항목명. 대응 불가 시 null
+            raw_label:     원문 항목명
+            value:         원문 값
+            evidence_span: 해당 항목과 값의 원문 구절과 위치
+            reason:        대응 불가 시 사유. 그 외 null
+  step_status:
+    determined: 필요한 Step 판정을 마쳤으며 steps 와 근거가 있다
+    partial: 일부 Step 은 확인했으나 나머지 부분은 판정할 수 없다
+    undetermined: Step 이 정의된 Move 이나 어떤 Step 인지 판정할 수 없다
+    not_applicable: 해당 Move 에 Step 이 정의되어 있지 않다
+  constraints:
+    - steps 는 GROUNDS·PROBLEM·ASSESSMENT·EFFECT 에만 기록한다
+    - spec_items 는 SPEC 에만 기록하며 다른 Move 는 빈 목록이다
+    - 구간 제목만 있는 블록은 annotations=[], primary_annotation_id=null 이다
+
+# -----------------------------------------------------------------------------
+# 평가
+# -----------------------------------------------------------------------------
+evaluation:
+  pilot: "작성 목적과 업무 주제를 고르게 포함한 200~300 블록. 팀원 독립 라벨링 후 불일치 조정"
+  split: "A/B 판본과 같은 보고서의 블록은 train/dev/test 사이에 흩어 놓지 않는다"
+  metrics:
+    - move 별 precision / recall / F1 · macro-F1
+    - UNDETERMINED 비율 (사유별로 나누어 본다)
+    - 경계 혼동 행렬 — 특히 ACTION↔EXECUTION · OUTCOME↔EFFECT · STATUS↔PROBLEM
+    - 규칙 검사에 연결했을 때의 최종 오탐률
+  baseline: >
+    v0.1 표제 사전의 성능을 함께 보고한다. 미판정률과 판정한 부분의 정확도를 나누어
+    적어야 LLM 전수 분류와 공정하게 비교된다.
