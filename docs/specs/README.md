@@ -9,6 +9,7 @@
 | [`moves.yaml`](../../src/bareum_ai/specs/moves.yaml) | 블록이 어떤 기능(Move)과 세부 유형(Step)을 수행하는가 | 1.0 | RMA 담당 |
 
 [RMA Move–Step 카탈로그](rma-move-step-catalog.md)는 `moves.yaml`의 정의와 판정 기준을 사람이 읽을 수 있게 설명한 문서다.
+[RMA 라벨링 파이프라인 설계](rma-labeling-pipeline.md)는 이 명세로 라벨을 만들고 검증하는 과정을 정한다.
 
 ## 변경 절차
 
