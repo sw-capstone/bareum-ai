@@ -75,6 +75,13 @@ class AssembleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "다른 파싱"):
             assemble(self.doc, self.tags, other, document_response(other), [], [], RUN)
 
+    def test_request_from_other_specs_is_rejected(self):
+        for key in ("moves_sha256", "sections_sha256"):
+            other = copy.deepcopy(self.doc_request)
+            other[key] = "different"
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "명세"):
+                assemble(self.doc, self.tags, other, document_response(other), [], [], RUN)
+
 
 if __name__ == "__main__":
     unittest.main()

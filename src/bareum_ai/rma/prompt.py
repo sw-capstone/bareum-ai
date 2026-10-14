@@ -97,6 +97,10 @@ def _block_system_prompt() -> str:
         _template("block"),
         {
             "rules": _lines(spec["labeling"]["rules"]),
+            "labeler_must": _flat(spec["contract"]["labeler_must"]),
+            "decision_order": "\n".join(
+                f"{i}. {_flat(rule)}" for i, rule in enumerate(spec["labeling"]["decision_order"], 1)
+            ),
             "table": _table(spec["labeling"]["table"]),
             "moves": "\n\n".join(
                 _move(name, move) for name, move in moves.items() if name not in auxiliary

@@ -25,6 +25,13 @@ def spec_hashes() -> dict[str, str]:
     return {f"{name}_sha256": sha256(specs.load(name)) for name in ("moves", "sections")}
 
 
+def validate_spec_hashes(*records: dict) -> None:
+    """고정 요청·파일럿과 현재 명세가 다르면 기존 라벨을 재해석하지 않는다."""
+    current = spec_hashes()
+    if any(any(record.get(key) != value for key, value in current.items()) for record in records):
+        raise ValueError("명세가 파일럿·요청 생성 시점과 다릅니다. 생성 당시 코드·명세 버전을 사용하거나 새 파일럿을 만드세요.")
+
+
 def with_request_id(request: dict) -> dict:
     request["request_id"] = sha256(request)
     return request
@@ -72,6 +79,8 @@ def _title(doc: dict) -> str | None:
 
 def document_request(doc: dict, section_tags: dict[str, str]) -> dict:
     classes = T.classify(doc, section_tags)
+    section_spec = specs.load("sections")
+    conditions = section_spec["outline_selection"]["applicability_conditions"]
     return with_request_id(
         {
             "schema_version": DOC_REQUEST,
@@ -80,7 +89,13 @@ def document_request(doc: dict, section_tags: dict[str, str]) -> dict:
             **spec_hashes(),
             "title": _title(doc),
             "sections": _sections(doc, section_tags),
-            "outline_ids": list(specs.load("sections")["outlines"]),
+            "outline_ids": list(section_spec["outlines"]),
+            "outline_candidates": [
+                {"outline_id": name, "required": outline["required"], "order": outline["order"],
+                 "applicability_conditions": conditions.get(name)}
+                for name, outline in section_spec["outlines"].items()
+            ],
+            "section_tag_names": {name: tag["name"] for name, tag in section_spec["tags"].items()},
             "text": document_text(doc, classes),
         }
     )

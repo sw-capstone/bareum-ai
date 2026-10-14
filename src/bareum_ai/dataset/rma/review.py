@@ -42,6 +42,7 @@ class Workspace:
     def __init__(self, work: Path):
         self.work = work
         self.pilot = json.loads((work / "pilot.json").read_text(encoding="utf-8"))
+        R.validate_spec_hashes(self.pilot.get("specs", {}))
 
     def documents(self) -> list[dict]:
         return self.pilot["documents"]
@@ -60,6 +61,7 @@ class Workspace:
 
     def requests(self, document_id: str) -> dict:
         reqs = json.loads((self.work / "requests" / f"{document_id}.json").read_text(encoding="utf-8"))
+        R.validate_spec_hashes(self.pilot.get("specs", {}), reqs["document_request"], *reqs["block_requests"])
         doc = self.parsed(document_id)
         hashes = {snapshot.content_hash(doc), R.sha256(doc)}
         if any(r.get("parsed_sha256") not in hashes or r.get("document_id") != document_id
@@ -205,10 +207,12 @@ def save(ws: Workspace, annotator: str, body: dict) -> dict:
     }
     saved = snapshot.bind(doc, saved)
     saved["span_basis"] = "RMA 요청에 담긴 정규화 텍스트/표 셀"
+    # 미완성 라벨은 저장하지만 입력·명세가 다르면 기존 파일을 덮어쓰지 않는다.
+    result = check(ws, document_id, saved)
     path = ws.labels_path(annotator, document_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(saved, ensure_ascii=False, indent=1), encoding="utf-8")
-    return check(ws, document_id, saved)
+    return result
 
 
 def finalize(ws: Workspace, annotator: str) -> tuple[list[str], list[str]]:
@@ -249,6 +253,8 @@ def import_run(ws: Workspace, run_dir: Path, name: str) -> list[str]:
         result = json.loads(source.read_text(encoding="utf-8"))
         doc = ws.parsed(meta["document_id"])
         snapshot.validate(doc, result)
+        ws.requests(meta["document_id"])
+        R.validate_spec_hashes(result.get("specs", {}))
         document = {k: v for k, v in result["document"].items() if k != "document_id"}
         saved = {
             "schema_version": LABELS,
@@ -285,7 +291,10 @@ def make_handler(ws: Workspace, annotator: str, references: list[str]):
             if self.path in ("/", "/index.html"):
                 self._send(200, files(__package__).joinpath("review.html").read_bytes(), "text/html; charset=utf-8")
             elif self.path == "/api/state":
-                self._json(state(ws, annotator, references))
+                try:
+                    self._json(state(ws, annotator, references))
+                except ValueError as error:
+                    self._json({"error": str(error)}, 400)
             else:
                 self._send(404, b"not found", "text/plain")
 

@@ -3,7 +3,8 @@
     uv run python -m bareum_ai.dataset.rma.pilot --parsed-root <파서 출력 루트> --work <작업 폴더>
 
 Dev에서만 고른다. 고른 섹션의 판정 단위만 라벨링하며, 요청은 이 시점의 명세로 만들어
-<작업 폴더>/requests/에 고정한다. 파일럿 도중 명세가 바뀌어도 저장한 라벨이 요청과 어긋나지 않게 하려는 것이다.
+<작업 폴더>/requests/에 저장한다. 명세 자체는 복사하지 않으며, 검토 도구는 생성 당시와
+현재 명세의 해시가 다르면 작업을 거절한다. 판정 기준 변경 시 새 작업 폴더를 만든다.
 선정 기준은 docs/specs/rma-labeling-pipeline.md 11절이다.
 """
 

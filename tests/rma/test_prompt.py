@@ -1,4 +1,6 @@
 import unittest
+from unittest import mock
+import copy
 
 from bareum_ai import sections, specs
 from bareum_ai.rma import prompt as P
@@ -79,6 +81,34 @@ class SchemaTests(unittest.TestCase):
 
 
 class PromptTests(unittest.TestCase):
+    def test_labeler_contract_and_decision_order_are_generated_from_spec(self):
+        load = specs.load
+        moves = copy.deepcopy(load("moves"))
+        moves["contract"]["labeler_must"] = "확인된 기능 보존 계약 테스트"
+        moves["labeling"]["decision_order"] = ["제목 판별 단계", "손상 판별 단계"]
+        before = P.prompt_sha256()
+        with mock.patch.object(specs, "load", side_effect=lambda name: moves if name == "moves" else load(name)):
+            text = P.block_system_prompt()
+            self.assertIn(moves["contract"]["labeler_must"], text)
+            self.assertIn("1. 제목 판별 단계\n2. 손상 판별 단계", text)
+            self.assertNotIn("{labeler_must}", text)
+            self.assertNotIn("{decision_order}", text)
+            self.assertNotEqual(before, P.prompt_sha256())
+
+    def test_prompt_distinguishes_normal_structure_from_broken_input(self):
+        text = P.block_system_prompt()
+        self.assertIn("한 단어·명사구·종결어미 부재만으로 파싱 손상이라고 단정하지 않는다", text)
+        self.assertIn("블록 전체의 확인된 기능을 UNDETERMINED 로 바꾸지 않는다", text)
+        self.assertIn("Move 를 유지하고 step_status·step_reason", text)
+        self.assertNotIn("그 블록만으로는 문장이 끝나지 않는 조각", text)
+
+    def test_outline_prompt_defers_unconfirmed_applicability(self):
+        text = P.document_system_prompt()
+        self.assertIn("outline_candidates", text)
+        self.assertIn("조건이 null 또는 빈 목록이면 아직 미확정이므로 선택하지 않는다", text)
+        self.assertIn("현재 문서와 가장 비슷한 목차를 고르지 않는다", text)
+        self.assertIn("section_tag_names", text)
+
     def test_block_prompt_carries_every_definition(self):
         text = P.block_system_prompt()
         for name, move in specs.load("moves")["moves"].items():

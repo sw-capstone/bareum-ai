@@ -85,7 +85,8 @@ let D = 0;             // 현재 문서 번호
 let L = {};            // 문서별 편집 중인 라벨
 let focus = null;      // {block_id, row} (row는 표일 때만)
 let pending = null;    // 마지막으로 드래그한 근거 {block_id, row, col, quote, occurrence}
-let saveTimer = null;
+const pendingSaves = new Map();  // 문서별 최신 편집. 성공한 저장만 제거한다.
+let saveQueue = Promise.resolve();
 const KIND = { document_title: "제목", heading: "제목", item: "항목", para: "문단", note: "주석", attachment: "붙임", table: "표" };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -209,22 +210,49 @@ function documentOut() {
 // ---- 저장 ---------------------------------------------------------------------
 
 function changed() {
-  $("#status").textContent = "저장 대기…";
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(save, 700);
+  const d = doc();
+  const id = d.meta.document_id;
+  clearTimeout(pendingSaves.get(id)?.timer);
+  // 선택 문서가 바뀌기 전에 원래 문서의 내용을 직렬화한다.
+  const entry = { d, body: JSON.stringify({ document_id: id, snapshot_id: d.meta.snapshot.snapshot_id,
+    document_response: documentOut(), block_responses: responses() }), error: null };
+  pendingSaves.set(id, entry);
+  entry.timer = setTimeout(() => { saveQueue = saveQueue.then(() => save(entry)); }, 700);
+  saveStatus();
   renderSide();
 }
 
-async function save() {
-  const d = doc();
-  const body = { document_id: d.meta.document_id, snapshot_id: d.meta.snapshot.snapshot_id, document_response: documentOut(), block_responses: responses() };
-  const res = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  const out = await res.json();
-  if (!res.ok) { $("#status").textContent = `저장 실패: ${out.error}`; return; }
-  d.check = out;
-  $("#status").textContent = `저장됨 ${new Date().toLocaleTimeString()}`;
-  renderTabs(); renderDoc(); renderSide();
+function saveStatus() {
+  const failed = [...pendingSaves.values()].find((entry) => entry.error);
+  $("#status").textContent = failed ? `저장 실패: ${failed.d.meta.title || failed.d.meta.document_id} — ${failed.error}`
+    : pendingSaves.size ? `저장 대기… (${pendingSaves.size}문서)` : `저장됨 ${new Date().toLocaleTimeString()}`;
 }
+
+async function save(entry) {
+  const { d, body } = entry;
+  const id = d.meta.document_id;
+  if (pendingSaves.get(id) !== entry) return;
+  try {
+    const res = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
+    if (pendingSaves.get(id) === entry) {
+      d.check = out;
+      pendingSaves.delete(id);
+      renderTabs(); renderDoc(); renderSide();
+    }
+  } catch (error) {
+    entry.error = error.message;
+  }
+  saveStatus();
+}
+
+window.addEventListener("beforeunload", (event) => {
+  if (pendingSaves.size) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
 
 // ---- 근거 선택 -----------------------------------------------------------------
 
@@ -550,14 +578,16 @@ function renderTabs() {
 function renderAll() { renderTabs(); renderDoc(); renderSide(); }
 
 (async function start() {
-  S = await (await fetch("/api/state")).json();
+  const res = await fetch("/api/state");
+  S = await res.json();
+  if (!res.ok) throw new Error(S.error || `HTTP ${res.status}`);
   for (const d of S.documents) L[d.meta.document_id] = fromSaved(d);
   $("#who").textContent = `라벨러: ${S.annotator}` + (S.references.length ? ` · 조정 대상: ${S.references.join(", ")}` : "");
   $("#difflabel").hidden = !S.references.length;
   $("#onlydiff").addEventListener("change", renderDoc);
   $("#status").textContent = "불러옴";
   renderAll();
-})();
+})().catch((error) => { $("#status").textContent = `불러오기 실패: ${error.message}`; });
 </script>
 </body>
 </html>

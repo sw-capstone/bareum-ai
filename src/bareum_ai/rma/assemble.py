@@ -122,6 +122,7 @@ def assemble(
     classes = T.classify(doc, section_tags)
     digest = snapshot.content_hash(doc)
     for req in [doc_request, *(req for req, _ in block_results)]:
+        R.validate_spec_hashes(req)
         if (req.get("parsed_sha256") not in {digest, R.sha256(doc)}
             or req.get("document_id") != doc["document"]["document_id"]):
             raise ValueError("다른 파싱 결과에 대한 RMA 요청을 조립할 수 없습니다")

@@ -23,12 +23,18 @@ def _ask(labeler, system: str, schema: dict, request: dict, validate, log: Calla
     issues: list[Issue] = []
     previous = None
     for attempt in range(1, MAX_RETRIES + 2):
-        raw = labeler(
-            system=system,
-            user=P.user_message(request, issues, previous),
-            schema=schema,
-            request=request,
-        )
+        try:
+            raw = labeler(
+                system=system,
+                user=P.user_message(request, issues, previous),
+                schema=schema,
+                request=request,
+            )
+        except (Exception, KeyboardInterrupt, SystemExit) as error:
+            log({"request_id": request["request_id"], "attempt": attempt,
+                 "raw": None, "issues": [], "usage": None,
+                 "error": {"type": type(error).__name__}})
+            raise
         try:
             response = json.loads(raw)
         except json.JSONDecodeError as error:

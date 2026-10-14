@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 import json
 from pathlib import Path
 import subprocess
+import urllib.error
 
 from bareum_ai.rma import prompt as P
 from bareum_ai.rma import request as R
@@ -53,7 +54,7 @@ def _flat_usage(usage: dict | None, prefix: str = "") -> dict[str, int]:
 
 def run(paths: list[Path], labeler, out_dir: Path) -> dict:
     created = datetime.now(UTC)
-    run_id = f"{created:%Y%m%dT%H%M%SZ}-{labeler.id}"
+    run_id = f"{created:%Y%m%dT%H%M%S%fZ}-{labeler.id}"
     run_dir = out_dir / run_id
     run_dir.mkdir(parents=True)
     labeler_meta = {"type": getattr(labeler, "kind", "model"), "id": labeler.id, "settings": labeler.settings}
@@ -67,36 +68,63 @@ def run(paths: list[Path], labeler, out_dir: Path) -> dict:
         "policy": {"max_retries": MAX_RETRIES, "context_missing_ratio": CONTEXT_MISSING_RATIO},
         "documents": [],
     }
-    for path in paths:
-        doc = json.loads(path.read_text(encoding="utf-8"))
-        frozen_path, frozen = snapshot.freeze(doc, run_dir / "snapshots")
-        document_id = doc["document"]["document_id"]
-        doc_dir = run_dir / "documents" / document_id
-        doc_dir.mkdir(parents=True)
-        usage: dict[str, int] = {}
+    manifest["status"] = "running"
+    manifest["documents"] = [
+        {"original_path": str(path), "status": "pending", "failed_units": None, "usage": {}}
+        for path in paths
+    ]
 
-        def log(record: dict) -> None:
-            calls.write(json.dumps(record, ensure_ascii=False) + "\n")
-            for key, value in _flat_usage(record.get("usage")).items():
-                usage[key] = usage.get(key, 0) + value
+    def checkpoint() -> None:
+        # 같은 디렉터리에서 교체해 쓰는 도중 중단되어도 이전 JSON은 보존한다.
+        temporary = run_dir / "manifest.json.tmp"
+        temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+        temporary.replace(run_dir / "manifest.json")
 
-        with (doc_dir / "calls.jsonl").open("w", encoding="utf-8") as calls:
-            result = label_document(doc, labeler, {"run_id": run_id, "labeler": labeler_meta}, log=log)
-        (doc_dir / "annotations.json").write_text(
-            json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8"
-        )
-        manifest["documents"].append(
-            {
-                "path": str(frozen_path),
-                "original_path": str(path),
-                "document_id": document_id,
-                "parsed_sha256": snapshot.content_hash(doc),
-                "snapshot": frozen,
-                "failed_units": len(result["failed_units"]),
-                "usage": usage,
-            }
-        )
-        (run_dir / "manifest.json").write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8"
-        )
+    checkpoint()  # 첫 문서를 읽거나 API를 부르기 전 실행 설정과 전체 대상을 남긴다.
+    current = None
+    try:
+        for path, current in zip(paths, manifest["documents"]):
+            current.update(status="running", started_at=datetime.now(UTC).isoformat())
+            checkpoint()
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            frozen_path, frozen = snapshot.freeze(doc, run_dir / "snapshots")
+            document_id = doc["document"]["document_id"]
+            current.update(path=str(frozen_path), document_id=document_id,
+                           parsed_sha256=snapshot.content_hash(doc), snapshot=frozen)
+            checkpoint()
+            doc_dir = run_dir / "documents" / document_id
+            doc_dir.mkdir(parents=True)
+
+            def log(record: dict) -> None:
+                calls.write(json.dumps(record, ensure_ascii=False) + "\n")
+                calls.flush()
+                for key, value in _flat_usage(record.get("usage")).items():
+                    current["usage"][key] = current["usage"].get(key, 0) + value
+                current["last_call"] = {k: record[k] for k in ("request_id", "attempt", "error") if k in record}
+                checkpoint()
+
+            with (doc_dir / "calls.jsonl").open("w", encoding="utf-8") as calls:
+                result = label_document(doc, labeler, {"run_id": run_id, "labeler": labeler_meta}, log=log)
+            (doc_dir / "annotations.json").write_text(
+                json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8"
+            )
+            current.update(status="completed", failed_units=len(result["failed_units"]),
+                           finished_at=datetime.now(UTC).isoformat())
+            checkpoint()
+    except (Exception, KeyboardInterrupt, SystemExit) as error:
+        status = "interrupted" if isinstance(error, (KeyboardInterrupt, SystemExit)) else "failed"
+        cause = error.__cause__
+        # 응답 본문·인증 정보가 담길 수 있는 예외 문자열은 manifest에 복사하지 않는다.
+        failure = {"type": type(error).__name__}
+        if cause is not None:
+            failure["cause_type"] = type(cause).__name__
+            if isinstance(cause, urllib.error.HTTPError):
+                failure["http_status"] = cause.code
+        manifest.update(status=status, error=failure, finished_at=datetime.now(UTC).isoformat())
+        if current is not None and current["status"] == "running":
+            current.update(status=status, error=failure, finished_at=manifest["finished_at"])
+        checkpoint()
+        raise
+    manifest.update(status="completed", finished_at=datetime.now(UTC).isoformat())
+    checkpoint()
     return manifest

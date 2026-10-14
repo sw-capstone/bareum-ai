@@ -7,7 +7,7 @@ from unittest import mock
 from bareum_ai.dataset.rma import run, split_files
 from bareum_ai.rma import request as R
 from bareum_ai.rma import runner
-from bareum_ai.rma.labelers import ReplayLabeler
+from bareum_ai.rma.labelers import LabelerError, ReplayLabeler
 from fixtures import ann, document_response, parsed_doc, response_for, small_chunks
 
 RUN = {"run_id": "test", "labeler": {"type": "model", "id": "replay"}}
@@ -106,6 +106,67 @@ class RunTests(unittest.TestCase):
             self.assertEqual(annotations["run_id"], manifest["run_id"])
             calls = (run_dir / "documents/doc_t/calls.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(calls), 4)
+            self.assertEqual(saved["status"], "completed")
+            self.assertEqual(saved["documents"][0]["status"], "completed")
+
+    def test_first_call_failure_preserves_initial_manifest_and_pending_documents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "doc.json"
+            source.write_text(json.dumps(parsed_doc()))
+            def fail(request, attempt):
+                saved = json.loads(next((root / "runs").glob("*/manifest.json")).read_text())
+                self.assertEqual(saved["status"], "running")
+                self.assertEqual([d["status"] for d in saved["documents"]], ["running", "pending"])
+                raise LabelerError("provider body must not be copied")
+            with self.assertRaises(LabelerError):
+                run([source, source], ReplayLabeler(fail), root / "runs")
+            path = next((root / "runs").glob("*/manifest.json"))
+            saved = json.loads(path.read_text())
+            self.assertEqual(saved["status"], "failed")
+            self.assertEqual([d["status"] for d in saved["documents"]], ["failed", "pending"])
+            self.assertEqual(saved["error"], {"type": "LabelerError"})
+            self.assertNotIn("provider body", path.read_text())
+            call = json.loads(next(path.parent.glob("documents/*/calls.jsonl")).read_text())
+            self.assertIsNone(call["usage"])
+            self.assertEqual(call["error"]["type"], "LabelerError")
+
+    def test_mid_run_interrupt_preserves_completed_results_and_usage(self):
+        for failure in (LabelerError("API failure"), KeyboardInterrupt()):
+            with self.subTest(error=type(failure).__name__), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                paths = []
+                for i in range(2):
+                    doc = parsed_doc()
+                    doc["document"]["document_id"] = f"doc_{i}"
+                    path = root / f"{i}.json"
+                    path.write_text(json.dumps(doc))
+                    paths.append(path)
+                def respond(request, attempt):
+                    if request["document_id"] == "doc_1" and request["schema_version"] != "rma-doc-request-1":
+                        raise failure
+                    return correct(request, attempt)
+                labeler = ReplayLabeler(respond)
+                labeler.last_usage = {"input_tokens": 10}
+                with self.assertRaises(type(failure)):
+                    run(paths, labeler, root / "runs")
+                path = next((root / "runs").glob("*/manifest.json"))
+                saved = json.loads(path.read_text())
+                status = "interrupted" if isinstance(failure, KeyboardInterrupt) else "failed"
+                self.assertEqual(saved["status"], status)
+                self.assertEqual([d["status"] for d in saved["documents"]], ["completed", status])
+                self.assertEqual(saved["documents"][1]["usage"], {"input_tokens": 10})
+                self.assertTrue((path.parent / "documents/doc_0/annotations.json").exists())
+                self.assertFalse((path.parent / "documents/doc_1/annotations.json").exists())
+
+    def test_input_read_failure_is_recorded_before_any_api_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaises(FileNotFoundError):
+                run([root / "missing.json"], ReplayLabeler(correct), root / "runs")
+            saved = json.loads(next((root / "runs").glob("*/manifest.json")).read_text())
+            self.assertEqual(saved["documents"][0]["status"], "failed")
+            self.assertEqual(saved["error"]["type"], "FileNotFoundError")
 
     def test_usage_is_summed_per_document(self):
         labeler = ReplayLabeler(correct)

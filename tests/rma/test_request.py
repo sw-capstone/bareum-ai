@@ -1,7 +1,8 @@
+import copy
 import unittest
 from unittest import mock
 
-from bareum_ai import sections
+from bareum_ai import sections, specs
 from bareum_ai.rma import request as R
 from fixtures import parsed_doc, small_chunks
 
@@ -29,6 +30,28 @@ class DocumentRequestTests(unittest.TestCase):
 
     def test_outline_ids_come_from_sections_spec(self):
         self.assertIn("결과", R.document_request(self.doc, self.tags)["outline_ids"])
+
+    def test_outline_candidates_preserve_structure_and_unconfirmed_conditions(self):
+        request = R.document_request(self.doc, self.tags)
+        candidates = {c["outline_id"]: c for c in request["outline_candidates"]}
+        self.assertEqual(set(candidates), set(request["outline_ids"]))
+        self.assertIn({"any_of": ["SEC_STATUS", "SEC_PROBLEM"]}, candidates["기획"]["required"])
+        self.assertEqual(candidates["행사교육"]["order"][1:3], ["SEC_BACKGROUND", "SEC_OVERVIEW"])
+        self.assertTrue(all(c["applicability_conditions"] is None for c in candidates.values()))
+        self.assertEqual(request["section_tag_names"]["SEC_BACKGROUND"], "추진 배경")
+
+    def test_new_applicability_condition_reaches_request_and_changes_identity(self):
+        original = R.document_request(self.doc, self.tags)
+        load = specs.load
+        section_spec = copy.deepcopy(load("sections"))
+        conditions = ["테스트용으로 확인한 목차 적용 조건"]
+        section_spec["outline_selection"]["applicability_conditions"]["결과"] = conditions
+        with mock.patch.object(specs, "load", side_effect=lambda name: section_spec if name == "sections" else load(name)):
+            changed = R.document_request(self.doc, self.tags)
+        candidate = next(c for c in changed["outline_candidates"] if c["outline_id"] == "결과")
+        self.assertEqual(candidate["applicability_conditions"], conditions)
+        self.assertNotEqual(original["request_id"], changed["request_id"])
+        self.assertNotEqual(original["sections_sha256"], changed["sections_sha256"])
 
     def test_execution_time_does_not_change_request_identity(self):
         self.doc["parser"] = {"stats": {"elapsed_seconds": 1}}

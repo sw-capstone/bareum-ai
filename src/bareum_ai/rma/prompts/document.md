@@ -4,7 +4,7 @@
 
 - 작성 목적(`document_type`): {document_types} 중 문서 전체의 주된 목적 하나. 여러 기능이 섞여 있어도 하나만 고른다. 판단하기 어려우면 null과 사유를 적는다.
 - 업무 주제(`document_topics`): {document_topics} 중 문서 전체의 주된 업무 주제에 해당하는 것을 모두 적는다. 하위 활동으로 행사·교육이 일부 포함된 것만으로는 넣지 않는다. 둘 다 해당하지 않으면 빈 목록, 판단할 정보가 부족하면 null과 사유를 적는다.
-- 표준 목차(`outline_id`): 요청의 `outline_ids` 중 이 문서에 적용 근거가 있는 목차. 작성 목적이나 주제 하나만으로 고르지 않는다. 적용할 목차가 없거나 고를 수 없으면 null로 두고, 어느 경우든 `outline_reason`에 근거나 사유를 적는다.
+- 표준 목차(`outline_id`): 요청의 `outline_candidates`에 제공된 적용 조건과 원문 근거로 선택한다. 후보 ID는 `outline_ids`와 같다. 태그 이름은 `section_tag_names`를 참고한다. `required`의 `any_of`는 해당 태그 중 하나를 요구하는 슬롯이다. 적용할 목차가 없거나 고를 수 없으면 null로 두고, 어느 경우든 `outline_reason`에 근거나 사유를 적는다.
 
 {outline_rules}
 

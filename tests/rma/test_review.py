@@ -1,3 +1,4 @@
+import copy
 import json
 from pathlib import Path
 import tempfile
@@ -6,7 +7,7 @@ import unittest
 from unittest import mock
 import urllib.request
 
-from bareum_ai import sections
+from bareum_ai import sections, specs
 from bareum_ai.dataset.rma import pilot, review
 from bareum_ai.rma import request as R
 from fixtures import document_response, parsed_doc, response_for, small_chunks
@@ -86,6 +87,41 @@ class PilotTests(unittest.TestCase):
 
 
 class ReviewTests(unittest.TestCase):
+    def test_spec_change_rejects_read_save_and_finalize_without_overwriting(self):
+        body = labels_for(self.ws)
+        review.save(self.ws, "alice", body)
+        path = self.ws.labels_path("alice", "doc_t")
+        before = path.read_bytes()
+        load = specs.load
+        for name in ("moves", "sections"):
+            def changed_spec(key):
+                value = copy.deepcopy(load(key))
+                if key == name:
+                    value["meta"]["version"] = "changed"
+                return value
+            with self.subTest(spec=name), mock.patch.object(specs, "load", changed_spec):
+                for action in (
+                    lambda: review.Workspace(self.ws.work),
+                    lambda: review.state(self.ws, "alice", []),
+                    lambda: review.save(self.ws, "alice", body),
+                    lambda: review.finalize(self.ws, "alice"),
+                ):
+                    with self.assertRaisesRegex(ValueError, "명세"):
+                        action()
+                self.assertEqual(path.read_bytes(), before)
+                self.assertFalse((self.ws.work / "final").exists())
+
+    def test_request_spec_mismatch_is_rejected(self):
+        path = self.ws.work / "requests/doc_t.json"
+        original = path.read_text()
+        for kind in ("document_request", "block_requests"):
+            reqs = json.loads(original)
+            request = reqs[kind] if kind == "document_request" else reqs[kind][0]
+            request["moves_sha256"] = "different"
+            path.write_text(json.dumps(reqs))
+            with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, "명세"):
+                self.ws.requests("doc_t")
+
     def test_old_tab_cannot_save_to_another_snapshot(self):
         body = labels_for(self.ws)
         body["snapshot_id"] = "different"

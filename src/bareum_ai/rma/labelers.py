@@ -39,7 +39,7 @@ class ReplayLabeler:
 class OpenAILabeler:
     """Responses API의 구조화 출력(JSON 스키마)으로 응답을 받는다.
 
-    키를 받기 전이라 실제 호출로 확인하지 않았다. 첫 시험 실행에서 요청·응답 형식을 확인한다.
+    호출별 usage를 실행기에 전달한다. 응답 내용의 검증과 재요청은 실행기가 담당한다.
     """
 
     def __init__(self, model: str = DEFAULT_MODEL, *, reasoning_effort: str | None = None, timeout: float = 600):
