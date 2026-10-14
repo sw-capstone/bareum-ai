@@ -120,6 +120,13 @@ class PromptTests(unittest.TestCase):
         self.assertIn("CONTEXT_MISSING", text)
         self.assertNotIn("{moves}", text)
 
+    def test_document_prompt_carries_outline_selection_boundaries(self):
+        text = P.document_system_prompt()
+        self.assertIn("행사교육의 두 적용 조건이 모두 확인되면", text)
+        self.assertIn("일반 기획·결과 목차보다 행사교육을 우선", text)
+        self.assertIn("회의 자체의 계획·논의 결과 보고", text)
+        self.assertIn("outline_reason 에 원문에서 확인한 대상·목적과 선택 이유", text)
+
     def test_document_prompt_carries_outline_rules(self):
         text = P.document_system_prompt()
         self.assertIn("기획 · 상황 · 결과 · 검토 · 기타", text)

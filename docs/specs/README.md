@@ -11,7 +11,7 @@
 [RMA Move–Step 카탈로그](rma-move-step-catalog.md)는 `moves.yaml`의 정의와 판정 기준을 사람이 읽을 수 있게 설명한 문서다.
 [RMA 라벨링 파이프라인 설계](rma-labeling-pipeline.md)는 이 명세로 라벨을 만들고 검증하는 과정을 정한다.
 
-- [RMA 재실행 일치도 근거](rma-repeatability-20261014.md): 보완 전 재계산과 보완 후 4편·2회 신규 실행(91.20%), 산식과 재현 방법.
+- [RMA 재실행 일치도 근거](rma-repeatability-20261014.md): 버전별 실행 기록과 최신 목차 기준 보완판의 4편·2회 측정(91.69%), 산식과 재현 방법.
 
 ## 변경 절차
 

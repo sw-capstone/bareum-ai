@@ -37,7 +37,11 @@ class DocumentRequestTests(unittest.TestCase):
         self.assertEqual(set(candidates), set(request["outline_ids"]))
         self.assertIn({"any_of": ["SEC_STATUS", "SEC_PROBLEM"]}, candidates["기획"]["required"])
         self.assertEqual(candidates["행사교육"]["order"][1:3], ["SEC_BACKGROUND", "SEC_OVERVIEW"])
-        self.assertTrue(all(c["applicability_conditions"] is None for c in candidates.values()))
+        self.assertTrue(all(c["applicability_conditions"] for c in candidates.values()))
+        self.assertEqual(
+            {k: c["applicability_conditions"] for k, c in candidates.items()},
+            specs.load("sections")["outline_selection"]["applicability_conditions"],
+        )
         self.assertEqual(request["section_tag_names"]["SEC_BACKGROUND"], "추진 배경")
 
     def test_new_applicability_condition_reaches_request_and_changes_identity(self):

@@ -44,6 +44,16 @@ class SectionsTests(unittest.TestCase):
                 with self.subTest(outline=outline_id, slot=slot):
                     self.assertLessEqual(set(names), tags)
 
+    def test_every_outline_has_applicability_conditions_and_source(self):
+        selection = self.sections["outline_selection"]
+        self.assertEqual(set(selection["applicability_conditions"]), set(self.sections["outlines"]))
+        for name, conditions in selection["applicability_conditions"].items():
+            with self.subTest(outline=name):
+                self.assertIsInstance(conditions, list)
+                self.assertTrue(conditions)
+                self.assertTrue(all(isinstance(c, str) and c.strip() for c in conditions))
+        self.assertRegex(selection["source"]["text_sha256"], r"^[0-9a-f]{64}$")
+
     def test_unordered_tags_are_defined(self):
         self.assertLessEqual(set(self.sections["unordered"]), set(self.sections["tags"]))
 
