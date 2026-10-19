@@ -13,6 +13,8 @@ AI 실행 코드 경로와 Python 개발 환경, 저장소 운영에 필요한 �
 - `src/bareum_ai/`: AI 실행 코드 (Python 3.14)
   - `dataset/`: 데이터셋 구축 도구
     - `parsing/`: 데이터셋 구축용 PDF 보고서 파서
+    - `rma/`: 라벨링 일괄 실행·파일럿·사람 라벨링·재실행 비교
+  - `rma/`, `sections/`, `specs/`: RMA 라벨링 핵심 모듈·섹션 태그·명세
 - `tests/`: AI 실행 코드 테스트
 - `pyproject.toml`, `uv.lock`: 의존성과 프로젝트 설정 (uv로 관리)
 
@@ -67,6 +69,9 @@ PyMuPDF는 `dataset` 의존성 그룹으로 관리한다. 텍스트 PDF가 대�
 
 ## 문서
 
+- [RMA 라벨링 파이프라인](docs/specs/rma-labeling-pipeline.md)
+- [파일럿 라벨링 안내](docs/guide/rma-pilot-labeling.md)
+- [재실행 일치도 근거](docs/specs/rma-repeatability-20261014.md)
 - [AI 개발 가이드](docs/guide/development-guide.md)
 - [저장소 구조](docs/architecture/repository-structure.md)
 - [하네스 설계 v1.4](docs/harness/harness-v1.4.md)
