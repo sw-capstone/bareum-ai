@@ -3,6 +3,14 @@ services:
     image: ${SMOKE_IMAGE:?}
     pull_policy: never
     init: true
+    command: ["uvicorn", "smoke_pdf_api:app", "--app-dir", "/smoke", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    environment:
+      BAREUM_AI_INTERNAL_API_TOKEN: example-internal-token
+      BAREUM_AI_S3_ALLOWED_HOST: example-bucket.s3.ap-northeast-2.amazonaws.com
+      BAREUM_AI_S3_ALLOWED_KEY_PREFIX: reports/
+    volumes:
+      - ./scripts/smoke_pdf_api.py:/smoke/smoke_pdf_api.py:ro
+      - ${SMOKE_PDF_FILE:-/dev/null}:/smoke/source.pdf:ro
     ports:
       - "127.0.0.1:0:8000"
     healthcheck:
