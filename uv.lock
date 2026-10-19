@@ -43,14 +43,12 @@ dependencies = [
     { name = "httpx2", extra = ["brotli", "http2"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pymupdf" },
     { name = "pyyaml" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.dev-dependencies]
-dataset = [
-    { name = "pymupdf" },
-]
 dev = [
     { name = "pytest" },
 ]
@@ -62,12 +60,13 @@ requires-dist = [
     { name = "httpx2", extras = ["http2", "brotli", "zstd"], specifier = ">=2.13.1,<3" },
     { name = "pydantic", specifier = ">=2.13,<3" },
     { name = "pydantic-settings", specifier = ">=2,<3" },
+    { name = "pymupdf", specifier = "==1.28.2" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 
 [package.metadata.requires-dev]
-dataset = [{ name = "pymupdf", specifier = "==1.28.2" }]
+dataset = []
 dev = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
