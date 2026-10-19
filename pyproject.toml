@@ -5,6 +5,8 @@ description = "바름 AI 처리 서비스"
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "fastapi>=0.115",
+    "pydantic>=2.13,<3",
+    "pydantic-settings>=2,<3",
     "uvicorn[standard]>=0.30",
 ]
 
