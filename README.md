@@ -15,6 +15,9 @@ AI 실행 코드 경로와 Python 개발 환경, 저장소 운영에 필요한 �
     - `parsing/`: 데이터셋 구축용 PDF 보고서 파서
     - `rma/`: 라벨링 일괄 실행·파일럿·사람 라벨링·재실행 비교
   - `rma/`, `sections/`, `specs/`: RMA 라벨링 핵심 모듈·섹션 태그·명세
+  - `pdf_parsing/`: 내부 PDF 파싱 API 계약과 요청별 실행
+    - `api/`: 라우터·요청·응답·인증
+    - `parser/`: PDF 검증과 파서 자식 프로세스 실행
 - `tests/`: AI 실행 코드 테스트
 - `pyproject.toml`, `uv.lock`: 의존성과 프로젝트 설정 (uv로 관리)
 
@@ -46,7 +49,19 @@ uv run python -m bareum_ai.dataset.parsing.parser <PDF 파일 또는 폴더> -o 
 | `.md` | 사람이 읽는 출력 |
 | `.raw.txt` | 추출 원문 비교용 |
 
-PyMuPDF는 `dataset` 의존성 그룹으로 관리한다. 텍스트 PDF가 대상이며 OCR, 그래프 의미 해석, 모든 표·서식의 범용 복원은 보장하지 않는다. 읽기 어려운 영역은 결과에 경고로 기록한다.
+PyMuPDF는 PDF 파싱 API에서도 사용하는 실행 의존성으로 관리한다. 텍스트 PDF가 대상이며 OCR, 그래프 의미 해석, 모든 표·서식의 범용 복원은 보장하지 않는다. 읽기 어려운 영역은 결과에 경고로 기록한다.
+
+## 내부 PDF 파싱 API
+
+`POST /internal/v1/pdf-parses`는 다운로드·검증·자식 프로세스 파싱이 끝날 때까지 기다린 뒤 결과를 반환한다. 서비스 전용 Bearer 토큰이 필요하다. 요청의 `reportId`, `parseAttemptId`와 S3 원본 메타데이터를 사용하며, 성공 응답은 `reportId`, `parseAttemptId`, `status: SUCCEEDED`, `startedAt`, `completedAt`, `extractionQuality`, `parsed`, `error: null`이다.
+
+실행 전 [.env.example](.env.example)의 인증·허용 S3 설정을 환경 변수로 주입한다. 기본 다운로드·파서·전체 실행 제한은 각각 120·120·300초다. Spring 대기시간은 전체 실행보다 길게 설정하며 내부 Nginx 제한은 330초다.
+
+- 실행: 큐·백그라운드 작업 없이 요청 안에서 처리한다. 시간 초과나 요청 취소 시 자식 프로세스를 종료하고 임시 파일·동시 실행 슬롯을 정리한다. 강제 종료로 남은 파일은 컨테이너 재생성 시 제거된다.
+- 배포: 단일 컨테이너·단일 worker를 지원한다. 동시 실행 한도와 실행 중 `parseAttemptId` 중복 방지는 프로세스 메모리 기준이며, 초과·중복 요청은 각각 503·409와 `Retry-After`를 반환한다.
+- 저장·조회: Spring이 시도·상태·결과 본문 저장과 프론트엔드 상태 조회를 담당한다. AI에는 DB·완료 결과 캐시·GET 상태 조회 API가 없으며, 완료 후 같은 요청을 보내도 다시 파싱한다.
+- 재시도: 오류 응답은 `{reportId, parseAttemptId, error: {code, message, action}}`이다. 재시도 가능한 오류의 `action`은 `CREATE_NEW_ATTEMPT`이며, Spring은 이전 작업이 멈춘 뒤 새 `parseAttemptId`와 새 다운로드 URL로 호출한다. 응답 유실 시 재파싱할 수 있으며, AI 재시작 시 자동 복구나 같은 시도 이어하기는 제공하지 않는다.
+- 품질(`warning-policy-v1`): 빈 페이지 경고만 있으면 `COMPLETE`, 표 검출·셀 줄바꿈·도식 등의 검토 경고나 `requires_vision`이 있으면 `PARTIAL`이다. 알 수 없는 경고도 검토 대상으로 보존하고, 본문이 전혀 없으면 실패한다.
 
 ## 현재 검사
 
