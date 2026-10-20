@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from bareum_ai.pdf_parsing.api.responses import ParsedPdf
 from bareum_ai.pdf_parsing.errors import ErrorCode, PdfParseApiError
+from bareum_ai.pdf_parsing.parser.table_validation import validate_table
 from bareum_ai.pdf_parsing.parser.worker_contract import ParserInput
 from bareum_ai.pdf_parsing.types import ExtractionQuality
 
@@ -111,6 +112,9 @@ def validate_extraction(parsed: ParsedPdf, job: ParserInput) -> ExtractionQualit
     sections = _SECTIONS.validate_python(parsed.sections)
     warnings = _WARNINGS.validate_python(parsed.warnings)
     regions = _REGIONS.validate_python(parsed.layout_regions)
+    tables = (block for block in parsed.blocks if block.get("kind") == "table")
+    for table in tables:
+        validate_table(table)
     page_ids = {page.page for page in pages}
     block_ids = {block.id for block in blocks}
     section_ids = {section.section_id for section in sections}
