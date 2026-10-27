@@ -2,6 +2,7 @@
 
 import re
 import unicodedata
+from math import isfinite
 
 from bareum_ai.sections import ANNEX, UNKNOWN, lookup
 
@@ -18,6 +19,49 @@ CONTEXT = "context"
 EXCLUDED = "excluded"
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+STRUCTURE_WARNINGS = frozenset({"table_grid_sparse", "table_geometry_ambiguous", "table_background_grid_split"})
+BBOX_TOLERANCE = 1.0  # PDF 좌표. 파서의 표 경계 비교와 같은 허용 오차.
+
+
+def _valid_bbox(value) -> bool:
+    return (
+        isinstance(value, (list, tuple)) and len(value) == 4
+        and all(type(v) in (int, float) and isfinite(v) for v in value)
+        and value[0] < value[2] and value[1] < value[3]
+    )
+
+
+def table_structure_warnings(doc: dict, block: dict) -> list[str]:
+    """해당 표에 연결된 구조 경고 코드. 페이지 전체·단순 겹침으로 연결하지 않는다."""
+    box = block.get("bbox")
+    if block.get("kind") != "table" or block.get("page") is None or not _valid_bbox(box):
+        return []
+    codes = set()
+    for warning in doc.get("warnings") or []:
+        code, area = warning.get("code"), warning.get("bbox")
+        if code not in STRUCTURE_WARNINGS or warning.get("page") != block["page"] or not _valid_bbox(area):
+            continue
+        if code == "table_background_grid_split":
+            # 경고 bbox는 분리 전 큰 격자다. 실제 복원 이력이 있는 내부 표만 연결한다.
+            linked = (
+                "background_grid_split" in (block.get("transformations") or [])
+                and area[0] - BBOX_TOLERANCE <= box[0]
+                and area[1] - BBOX_TOLERANCE <= box[1]
+                and box[2] <= area[2] + BBOX_TOLERANCE
+                and box[3] <= area[3] + BBOX_TOLERANCE
+            )
+        else:
+            linked = all(abs(a - b) < BBOX_TOLERANCE for a, b in zip(area, box))
+        if linked:
+            codes.add(code)
+    return sorted(codes)
+
+
+def require_labelable(classes: dict[str, dict], block_ids) -> None:
+    """과거 요청으로 현재 판정 대상이 아닌 블록의 라벨을 조립하는 것을 막는다."""
+    invalid = sorted({bid for bid in block_ids if classes.get(bid, {}).get("class") not in (TARGET, TABLE)})
+    if invalid:
+        raise ValueError(f"현재 대상 선정과 요청이 다릅니다: {invalid}. 새 작업 폴더에서 요청을 생성하세요.")
 
 
 def normalize(text: str) -> str:
@@ -41,6 +85,8 @@ def classify(doc: dict, section_tags: dict[str, str]) -> dict[str, dict]:
                 cls, reason = UNREADABLE, "requires_vision"
             elif not block.get("rows"):
                 cls, reason = UNREADABLE, "no_rows"
+            elif warnings := table_structure_warnings(doc, block):
+                cls, reason = UNREADABLE, "table_structure_warning:" + ",".join(warnings)
             else:
                 cls = TABLE
         elif kind in TARGET_KINDS:

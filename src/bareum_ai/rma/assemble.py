@@ -128,6 +128,7 @@ def assemble(
             raise ValueError("다른 파싱 결과에 대한 RMA 요청을 조립할 수 없습니다")
     labeled: dict[str, dict] = {}
     for req, resp in block_results:
+        T.require_labelable(classes, (t["id"] for t in req["targets"]))
         targets = {t["id"]: t for t in req["targets"]}
         for block in resp["blocks"]:
             labeled[block["block_id"]] = _block(block, targets[block["block_id"]])

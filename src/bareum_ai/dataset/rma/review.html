@@ -147,6 +147,22 @@ function unitOf(blockId, row) {
 }
 function allEmpty(cells) { return cells.every((c) => !c.text.trim() || c.inherited_from); }
 
+function setStepStatus(a, status) {
+  a.step_status = status;
+  if (status === "determined" || status === "not_applicable") a.step_reason = null;
+}
+function setMove(a, move) {
+  a.move = move;
+  a.steps = [];
+  a.step_reason = null;
+  setStepStatus(a, S.moves[move]?.steps.length ? "undetermined" : "not_applicable");
+}
+function setTableStatus(t, status) {
+  t.table_status = status;
+  if (status === "labeled") t.table_reason = null;
+  // 행 편집은 현재 화면에서만 보존한다. unreadable의 저장 응답에는 rows=[]를 쓴다.
+}
+
 function annotationsOut(anns, prefix) {
   return anns.map((a, i) => ({
     annotation_id: `${prefix}a${i + 1}`,
@@ -155,7 +171,7 @@ function annotationsOut(anns, prefix) {
     context_block_ids: a.context_block_ids || [],
     steps: (a.steps || []).map((s) => ({ step: s.step, evidence_span: emptySpan(s.evidence_span) })),
     step_status: a.step_status,
-    step_reason: a.step_reason || null,
+    step_reason: ["determined", "not_applicable"].includes(a.step_status) ? null : (a.step_reason || null),
     undetermined_reason: a.move === "UNDETERMINED" ? (a.undetermined_reason || null) : null,
     spec_items: a.move === "SPEC" ? (a.spec_items || []).map((it) => ({
       spec_field: it.spec_field || null, raw_label: it.raw_label || "", value: it.value || "",
@@ -177,7 +193,7 @@ function blockOut(blockId) {
       annotations: u.role === "body" ? annotationsOut(u.annotations, `r${r}.`) : [] };
   });
   return { block_id: blockId, primary_annotation_id: null, annotations: [],
-    table: { table_status: t.table_status, table_reason: t.table_reason || null, header_rows: t.header_rows,
+    table: { table_status: t.table_status, table_reason: t.table_status === "labeled" ? null : (t.table_reason || null), header_rows: t.header_rows,
       row_header_cols: t.row_header_cols, rows } };
 }
 
@@ -437,11 +453,12 @@ function renderTable(side, blockId) {
   const t = unitOf(blockId);
   side.append(el("h3", {}, `표 ${blockId.split("_").pop()}`), issueBox(unitIssues(blockId).filter((i) => !i.path.includes(".rows["))));
   side.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "표 상태"),
-    el("select", { onchange: (e) => { t.table_status = e.target.value; changed(); } },
+    el("select", { onchange: (e) => { setTableStatus(t, e.target.value); changed(); } },
       ["labeled", "unreadable"].map((v) => el("option", { value: v, selected: t.table_status === v }, v === "labeled" ? "행 단위로 판정" : "읽을 수 없음")))));
   if (t.table_status === "unreadable") {
     side.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "사유"),
       el("input", { type: "text", value: t.table_reason || "", onchange: (e) => { t.table_reason = e.target.value; changed(); } })));
+    side.append(el("p", { class: "note" }, "읽을 수 없음으로 저장한 뒤 화면을 다시 열면 이전 행 판정은 복원되지 않습니다."));
     return;
   }
   const toggle = (list, v) => list.includes(v) ? list.filter((x) => x !== v) : [...list, v].sort((a, c) => a - c);
@@ -482,7 +499,7 @@ function renderAnnotations(side, u, blockId, row) {
     const card = el("div", { class: "ann" });
     card.append(el("h4", {}, el("input", { type: "radio", name: "primary", checked: u.primary === i, title: "주 기능", onchange: () => { u.primary = i; changed(); } }),
       `기능 ${i + 1}`,
-      el("select", { onchange: (e) => { a.move = e.target.value; const mm = moves[a.move]; a.steps = []; a.step_status = mm && mm.steps.length ? "undetermined" : "not_applicable"; changed(); } },
+      el("select", { onchange: (e) => { setMove(a, e.target.value); changed(); } },
         el("option", { value: "" }, "Move 선택"), Object.entries(moves).map(([k, v]) => el("option", { value: k, selected: a.move === k }, `${k} ${v.name}`))),
       el("button", { class: "danger", onclick: () => { u.annotations.splice(i, 1); if (u.primary === i) u.primary = null; else if (u.primary > i) u.primary -= 1; changed(); } }, "삭제")));
     if (m) card.append(el("div", { class: "def" }, [m.goal, m.boundary].filter(Boolean).join(" / ")));
@@ -495,13 +512,13 @@ function renderAnnotations(side, u, blockId, row) {
           return el("label", { title: has ? has.evidence_span.quote : "" }, el("input", { type: "checkbox", checked: !!has, onchange: (e) => {
             if (e.target.checked) { const s = takePending(blockId); if (!s) { e.target.checked = false; return; } a.steps.push({ step: st, evidence_span: s }); }
             else a.steps = a.steps.filter((s) => s.step !== st);
-            if (a.step_status === "undetermined" && a.steps.length) a.step_status = "determined";
-            if (!a.steps.length && (a.step_status === "determined" || a.step_status === "partial")) a.step_status = "undetermined";
+            if (a.step_status === "undetermined" && a.steps.length) setStepStatus(a, "determined");
+            if (!a.steps.length && (a.step_status === "determined" || a.step_status === "partial")) setStepStatus(a, "undetermined");
             changed(); } }), st);
         })));
       for (const s of a.steps) card.append(el("div", { class: "note" }, `${s.step} 근거: `, el("span", { class: "quote" }, s.evidence_span.quote)));
       card.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "Step 상태"),
-        el("select", { onchange: (e) => { a.step_status = e.target.value; changed(); } },
+        el("select", { onchange: (e) => { setStepStatus(a, e.target.value); changed(); } },
           [["determined", "판정 완료"], ["partial", "일부 판정"], ["undetermined", "판정 불가"]].map(([v, n]) => el("option", { value: v, selected: a.step_status === v }, n))),
         a.step_status === "partial" || a.step_status === "undetermined" ? el("input", { type: "text", placeholder: "미확정 사유", value: a.step_reason || "", onchange: (e) => { a.step_reason = e.target.value; changed(); } }) : null));
     }

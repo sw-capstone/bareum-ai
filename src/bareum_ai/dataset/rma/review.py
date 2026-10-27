@@ -19,6 +19,7 @@ final/<라벨러>/<document_id>.json
 """
 
 import argparse
+from copy import deepcopy
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
@@ -32,7 +33,7 @@ from bareum_ai.dataset.parsing import snapshot
 from bareum_ai.rma import request as R
 from bareum_ai.rma import targets as T
 from bareum_ai.rma.assemble import assemble
-from bareum_ai.rma.validate import validate_block_response, validate_document_response
+from bareum_ai.rma.validate import locate, validate_block_response, validate_document_response
 
 LABELS = "rma-human-labels-2"
 _NAME = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
@@ -67,6 +68,19 @@ class Workspace:
         if any(r.get("parsed_sha256") not in hashes or r.get("document_id") != document_id
                for r in [reqs["document_request"], *reqs["block_requests"]]):
             raise ValueError("파일럿 요청이 고정 파싱 입력과 다릅니다")
+        classes = T.classify(doc, sections.tag_document(doc))
+        selected = self.meta(document_id)["sections"]
+        expected = {
+            b["id"] for b in doc["blocks"]
+            if classes[b["id"]]["class"] in (T.TARGET, T.TABLE)
+            and (selected is None or b.get("section_id") in selected)
+        }
+        actual = {t["id"] for r in reqs["block_requests"] for t in r["targets"]}
+        if actual != expected:
+            raise ValueError(
+                f"파일럿 요청과 현재 대상 선정이 다릅니다: {sorted(actual ^ expected)}. "
+                "새 작업 폴더에서 요청을 생성하세요."
+            )
         return reqs
 
     def labels_path(self, annotator: str, document_id: str) -> Path:
@@ -243,6 +257,80 @@ def finalize(ws: Workspace, annotator: str) -> tuple[list[str], list[str]]:
     return done, skipped
 
 
+def _import_spans(doc: dict, result: dict) -> tuple[dict, list[dict]]:
+    """최종 결과의 문자 위치를 검수 응답의 occurrence로 복원한다. 입력은 변경하지 않는다."""
+    by_id = {b["id"]: b for b in doc["blocks"]}
+    texts = R.block_texts(doc, sections.tag_document(doc))
+
+    def span(value, text, path):
+        if not isinstance(value, dict):
+            raise ValueError(f"{path}: 근거가 필요합니다")
+        start, end, quote = value.get("start"), value.get("end"), value.get("quote")
+        if (type(start) is not int or type(end) is not int or not isinstance(quote, str)
+            or not quote or not 0 <= start < end <= len(text) or text[start:end] != quote):
+            raise ValueError(f"{path}: start/end와 정규화 원문의 quote가 일치하지 않습니다")
+        starts = []
+        i = text.find(quote)
+        while i >= 0:
+            starts.append(i)
+            i = text.find(quote, i + 1)
+        occurrence = starts.index(start) + 1 if len(starts) > 1 else None
+        if locate(text, quote, occurrence) != (start, end):
+            raise ValueError(f"{path}: 근거 위치를 복원할 수 없습니다")
+        return {k: v for k, v in value.items() if k not in ("start", "end", "occurrence")} | {
+            "occurrence": occurrence,
+        }
+
+    def document_span(value, path):
+        if not isinstance(value, dict) or value.get("block_id") not in texts:
+            raise ValueError(f"{path}: 문서 근거의 block_id가 유효하지 않습니다")
+        return span(value, texts[value["block_id"]], path)
+
+    document = deepcopy({k: v for k, v in result["document"].items() if k != "document_id"})
+    if document.get("document_type_evidence") is not None:
+        document["document_type_evidence"] = document_span(document["document_type_evidence"], "document_type_evidence")
+    elif document.get("document_type") is not None:
+        raise ValueError("document_type_evidence: 근거가 필요합니다")
+    for i, evidence in enumerate(document.get("document_topics_evidence") or []):
+        evidence["evidence_span"] = document_span(evidence.get("evidence_span"), f"document_topics_evidence[{i}]")
+
+    blocks = deepcopy(result["blocks"])
+    for block in blocks:
+        bid = block["block_id"]
+        if bid not in by_id:
+            raise ValueError(f"{bid}: 원문에 없는 블록입니다")
+        original = by_id[bid]
+        rows = T.table_rows(original) if original["kind"] == "table" else None
+
+        def block_span(value, path):
+            if rows is None:
+                return span(value, T.normalize(original.get("text", "")), path)
+            r, c = (value.get("row"), value.get("col")) if isinstance(value, dict) else (None, None)
+            if type(r) is not int or type(c) is not int or not 0 <= r < len(rows) or not 0 <= c < len(rows[r]):
+                raise ValueError(f"{path}: 표 근거의 row/col이 유효하지 않습니다")
+            if "inherited_from" in rows[r][c]:
+                raise ValueError(f"{path}: 병합 시작 셀을 가리켜야 합니다")
+            return span(value, rows[r][c]["text"], path)
+
+        def annotations(anns, path):
+            for i, ann in enumerate(anns):
+                p = f"{path}.annotations[{i}]"
+                ann["evidence_span"] = block_span(ann.get("evidence_span"), f"{p}.evidence_span")
+                for j, step in enumerate(ann["steps"]):
+                    step["evidence_span"] = block_span(step.get("evidence_span"), f"{p}.steps[{j}].evidence_span")
+                for j, item in enumerate(ann["spec_items"]):
+                    q = f"{p}.spec_items[{j}]"
+                    item["evidence_span"] = block_span(item.get("evidence_span"), f"{q}.evidence_span")
+                    if item.get("label_span") is not None:
+                        item["label_span"] = block_span(item["label_span"], f"{q}.label_span")
+
+        annotations(block["annotations"], bid)
+        if block.get("table"):
+            for row in block["table"]["rows"]:
+                annotations(row["annotations"], f"{bid}.rows[{row['row']}]")
+    return document, blocks
+
+
 def import_run(ws: Workspace, run_dir: Path, name: str) -> list[str]:
     """모델 실행 결과(rma-annotations-2)를 라벨링 화면의 기준 라벨러로 불러온다. 불러온 문서 id 목록."""
     imported = []
@@ -255,7 +343,7 @@ def import_run(ws: Workspace, run_dir: Path, name: str) -> list[str]:
         snapshot.validate(doc, result)
         ws.requests(meta["document_id"])
         R.validate_spec_hashes(result.get("specs", {}))
-        document = {k: v for k, v in result["document"].items() if k != "document_id"}
+        document, blocks = _import_spans(doc, result)
         saved = {
             "schema_version": LABELS,
             "annotator": name,
@@ -264,7 +352,7 @@ def import_run(ws: Workspace, run_dir: Path, name: str) -> list[str]:
             "source": {"run_id": result["run_id"], "labeler": result["labeler"], "failed_units": result["failed_units"]},
             "document_response": document,
             # 화면은 블록 id로만 찾으므로 실행 결과의 블록을 묶음 하나에 담는다
-            "block_responses": {result["run_id"]: {"blocks": result["blocks"]}},
+            "block_responses": {result["run_id"]: {"blocks": blocks}},
         }
         saved = snapshot.bind(doc, saved)
         saved["span_basis"] = result["span_basis"]
