@@ -1,0 +1,844 @@
+# =============================================================================
+# rules.yaml — 위반 유형 카탈로그
+#
+# 공공보고서 규정·품질 검증 코파일럿
+# 이 파일은 위반 유형의 단일 원본(SSOT)이다. 데이터셋 인스턴스는 포함하지 않는다.
+# =============================================================================
+
+meta:
+  version: "1.5"
+  revision_note: "2026-10-05 R7을 RMA Move–Step 카탈로그 5.3에 맞춤: UNDETERMINED·Step 미확정은 그 정보에 의존하는 검사만 제한하고, INPUT_BROKEN 구간은 원문을 읽는 검사도 not_executable. EXP-02는 SPEC 구절만 제외. STR-03·STR-04는 sections.yaml v1.2의 outlines[outline_id]로 조회하고 outline_id가 null이면 not_executable. moves.yaml v1.0·sections.yaml v1.2 참조로 갱신. 다른 규칙은 유지. (1.4: FMT-04는 본문·개조식 금액에만 적용하고 원문 표 내부 금액은 제외)"
+  status: draft   # 확정은 파일럿 정답셋으로 임계값을 역산한 뒤에 선언한다
+  authority:
+    manual: "보고서 작성 종합 매뉴얼 (㈜커뮤니케이션컨설팅앤클리닉)"
+    law_api: "법제처 국가법령정보 공유 서비스 OpenAPI"
+  input_assumption:
+    # available: true 는 필드가 존재한다는 뜻이며, 그 값을 신뢰할지는 규칙마다 따로 정한다.
+    source_format: [pdf, txt]
+    style_attr_available: false       # 여백·폰트·줄간격 등 서식 속성 사용 불가
+    table_structure_available: true   # blocks[].rows — 격자 표만. 복원 실패는 warnings 로 표시
+    layout_offset_available: true     # blocks[].indent_ta — x좌표 근사. 2타 단위 정밀도는 미보장
+    section_available: true           # sections[].section_id + tag (sections.yaml v1.2)
+    move_available: true              # blocks[].annotations[] (moves.yaml v1.0, LLM 라벨)
+  policy:
+    id_immutable: true          # 확정 후 rule_id 의미 변경 금지
+    id_reuse: false             # 뺀 ID 를 다른 의미로 재사용 금지
+    no_dead_entries: true       # 실행하지 않을 유형은 카탈로그에 두지 않는다
+    omit_empty: true            # 값이 없는 필드는 null·[] 로 적지 않고 생략한다
+    evidence_required: true     # 근거 조항이 없는 유형은 카탈로그에 등재하지 않는다
+    threshold_in_catalog: true  # 임계값의 코드 하드코딩 금지
+    confidence_gate_calibration: pending  # min_confidence 는 dev셋 확보 후 목표 오탐률에서 역산
+    atomic_evaluation: true
+    # 평가는 언제나 집계 전 원자 단위로 한다. 같은 rule_id 의 다발 히트를 한 건으로
+    # 묶는 것은 출력 계층의 표현이며 판정 단위가 아니다. 이 구분이 없으면 나중에
+    # 묶음을 도입할 때 gold 의 앵커 n개와 시스템의 1건을 어떻게 맞출지가 문제가 되어
+    # scope_policy 까지 손대야 한다.
+    advisory_collapsed_by_default: true
+    # 출력에서 advisory 는 기본으로 접어 제시하고 must_fix · verify 를 먼저 보인다.
+    # severity 를 정해두고 소비하지 않으면 지적 수는 그대로다.
+
+# -----------------------------------------------------------------------------
+# 열거형 정의
+# -----------------------------------------------------------------------------
+enums:
+
+  group:
+    LAW: 인용 법령·조례를 원문과 대조한다.
+    FMT: 매뉴얼의 표기·부호 규칙을 문자열에 적용한다.
+    STR: 문서 유형별 표준 목차와 분량 기준에 맞는지 섹션 구조를 검사한다.
+    CON: 문서 내부의 두 지점을 대조한다. 문서 간 대조는 v1 범위 밖이다.
+    EXP: 정답이 하나로 정해지지 않는 문체·표현을 판단한다.
+
+  judgment:
+    rule:  규칙·패턴·수치 비교로 판정. LLM 호출 0회, 재현성 1.0
+    model: LLM이 판정. 재현성 미보장
+
+  evidence_source:
+    manual:     매뉴얼. 문서와 무관하게 고정이므로 사전 컴파일
+    cited_law:  문서가 인용한 개별 법령·조례. 문서마다 달라 매번 조회
+    internal:   문서 자기 자신과의 대조
+
+  scope:
+    sentence:   문장 1개
+    block:      개조식 항목 1개 (1. □ ㅇ - · 단위)
+    section:    섹션 1개
+    document:   문서 전체. 인라인 하이라이트 불가
+    multi_span: 떨어진 2개 이상 지점의 관계
+    span_level: 본문 또는 표 셀의 금액 등 문자열 구간
+
+  default_severity:
+    # 판정 신뢰도가 아니라 오류의 크기로 정한다. 카탈로그 값은 유형 기본값이다.
+    # 어느 값을 줄지는 severity_policy 가 정한다. 유형마다 고르는 것은 심각도가 아니라 basis 다.
+    must_fix: 고치지 않으면 반려 사유가 된다. 점수 반영
+    verify:   사실 확인이 필요하다. 점수 반영(감점 완화)
+    advisory: 고치면 좋다. 점수 미반영
+
+  synth_tier:
+    A: 결정론적·가역. 오염 함수의 역이 정답 교정문이다
+    B: 생성 필요·다중 정답. LLM 생성 후 검출 함수로 reject sampling
+    C: 외부 사실 의존. 합성 불가 또는 부분만 가능
+
+  gate:
+    retrieval_score:  검색·리랭킹 점수. 판정 이전에 근거 확보 여부를 잰다
+    self_consistency: 동일 입력 k회 샘플링 후 다수 판정의 비율
+
+  fix:
+    transform: 결정론적 교정문 생성 가능
+    rewrite:   LLM 재작성 필요. 정답 유일하지 않음
+    none:      자동 교정 금지. 지적만 한다
+
+  depends_on:
+    # 전처리 '단계'. 이 단계가 돌아야 검사기를 실행할 수 있다
+    text_normalize:    PDF 추출 텍스트 정규화 (워드랩 병합, 머리말·꼬리말·쪽번호 제거)
+    sentence_split:    문장 분리
+    block_tree:        블록 트리 (marker 기반 depth / parent)
+    section_tag:       섹션 태깅
+    citation_extract:  법령 인용 표현 추출
+
+  consumes:
+    # 전처리가 만든 라벨. 확보되지 않으면 그 검사는 not_executable 이다(R7).
+    document_type:     문서 유형. moves.yaml 의 LLM 라벨러가 판정한다
+    outline_id:        적용할 표준 목차. 작성 목적·업무 주제와 별도로 선택한다(sections.yaml#outline_selection)
+    "sections.*":      sections.yaml v1.2 의 섹션 태그 또는 표준 목차(outlines)
+    "moves.*":         moves.yaml v1.0 의 annotations 에 기록된 Move · Step · 속성
+
+# -----------------------------------------------------------------------------
+# 제약 규칙
+#   불변식 (R3·R5·R8·R9)   카탈로그 자체의 속성. 로드 단계에서 검증하고 위반 시 오류
+#   실행 규약 (R1·R2·R7·R10) 검사 실행 시점에 검사기가 지킨다
+#   계층 원칙 (R6)          구현에서 지킨다. 카탈로그로는 검증할 수 없다
+#
+#   번호는 moves.yaml·cases.yaml 이 참조한다. 재배열·재사용하지 않는다.
+#   R4(scope=document 는 인라인 하이라이트 대상이 없다)는 삭제했다.
+#   제약이 아니라 enums.scope.document 정의의 따름정리였다. 자리는 비워 둔다.
+# -----------------------------------------------------------------------------
+constraints:
+  R1: >
+    judgment=model 인 유형은 threshold.gate 로 지정된 신호가 min_confidence 미만이면 보고하지 않는다(abstain).
+    보고할 경우 심각도는 유형 고정값을 그대로 적용한다. 신뢰도로 심각도를 깎지 않는다.
+    LLM이 스스로 보고한 신뢰도(verbalized)는 캘리브레이션 미보장으로 게이트에 사용하지 않는다.
+  R2: evidence.source=cited_law 는 조회 실패 시 not_executable. 위반 보고 금지
+  R3: evidence.source=internal 이면 scope=multi_span 이어야 한다
+  R5: synth.tier=C 인 유형은 corrupt_fn 을 가질 수 없다
+  R6: >
+    검사기 계층의 LLM 호출은 judgment=model 검사기 내부에서만 발생한다.
+    전처리 계층(section_tag 등)의 LLM 사용은 이 제약의 대상이 아니다.
+  R7: >
+    consumes 에 적힌 라벨이 확보되지 않으면 그 검사는 not_executable 이다. 위반 보고 금지.
+    UNDETERMINED·Step 미확정은 그 정보에 의존하는 검사만 제한한다. 같은 블록의 확정된
+    annotations 와 라벨이 필요 없는 검사는 실행한다.
+    INPUT_BROKEN 구간은 원문이 손상됐으므로 원문을 읽는 검사도 not_executable 이다.
+    필수 내용의 존재 여부가 미확정 블록 때문에 불명확하면 누락으로 보고하지 않고 not_executable 로 둔다.
+    '기대 효과가 없다'와 '기대 효과를 읽지 못했다'를 구분하지 않으면
+    파싱이 나쁜 문서일수록 위반이 많이 나오는 시스템이 된다.
+    kind 가 approval·header·footer 인 블록은 제외한다. 결재 시스템과 출력 도구가 찍은
+    값이라 작성자가 고칠 수 있는 대상이 아니다. move 가 아니라 파서 필드로 판정한다.
+    move=OTHER 는 그 자체로 제외 사유가 아니다. 표는 작성자 저작물이다.
+    대상을 좁혀야 하는 검사는 consumes 로 선언한다(EXP-02 가 그렇게 한다).
+  R8: judgment=model 인 유형은 threshold.gate 를 가져야 한다
+  R9: suppresses 에 적힌 rule_id 는 카탈로그에 실재해야 한다
+  R10: >
+    억제는 전이하지 않는다. 실제로 보고된 유형의 suppresses 만 적용한다.
+    FMT-07 이 FMT-01 을 억제해도 FMT-01 이 가진 FMT-02 억제는 발동하지 않는다.
+  R11: >
+    모든 유형은 severity_basis 를 하나 가지며 그 값은 severity_policy 에 실재해야 한다.
+    default_severity 는 그 basis 에 적힌 severity 와 같아야 한다.
+    심각도를 바꾸려면 basis 를 바꾼다. 심각도만 따로 손대는 것을 막는 제약이다.
+
+# -----------------------------------------------------------------------------
+# 심각도 판정 기준 — 유형마다 basis 를 하나 고르면 심각도는 거기서 따라온다
+#   위에서부터 묻고 처음 걸리는 basis 를 쓴다. 둘이 걸리면 앞의 것이 이긴다.
+#   basis 를 먼저 정해야 '이건 중요해 보인다'로 심각도가 흔들리지 않는다.
+# -----------------------------------------------------------------------------
+severity_policy:
+
+  external_dependent:
+    severity: verify
+    test: 참·거짓이 문서 밖 사정이나 작성자 의도에 달려 있어 원문 대조만으로 갈리지 않는다.
+    # '판정'이 확정되지 않는 경우다. '교정'이 확정되지 않는 것(fix: none)은 여기가 아니다.
+    # FMT-07 은 어느 날짜가 맞는지 모르지만 달력에 없다는 판정 자체는 확정된다.
+    # judgment=model 도 여기가 아니다. 신뢰도로 심각도를 깎지 않는다(R1).
+
+  wrong_fact:
+    severity: must_fix
+    test: 위반이 참이면 독자가 틀린 사실·수치를 읽는다.
+
+  missing_required:
+    severity: must_fix
+    test: 문서 유형이 갖춰야 할 필수 요소가 통째로 없다.
+    # 요소는 있고 내용이 얇은 것은 weak_writing 이다(STR-03 과 EXP-04 의 경계).
+
+  broken_hierarchy:
+    severity: must_fix
+    test: 부호·층위 체계가 깨져 항목의 상하 관계를 잘못 읽는다.
+
+  notation_only:
+    severity: advisory
+    test: 뜻은 그대로고 표기만 규칙과 다르다. 교정이 기계적이다.
+    # 한 문서에서 수십 번 발화한다. must_fix 로 두면 목록이 표기 지적으로 덮인다.
+
+  quantity_or_order:
+    severity: advisory
+    test: 분량·배열 기준을 넘었다. 임계값으로 재며 초과가 흔하다.
+    # 실측 초과율이 과반인 유형(STR-08 55%)을 must_fix 로 두면 거의 모든 문서가 반려 대상이 된다.
+
+  weak_writing:
+    severity: advisory
+    test: 표현이 모호하거나 근거가 얇다. 교정의 정답이 유일하지 않다.
+    # 틀린 정보가 아니라 부족한 정보다. 이 구분이 wrong_fact 와의 경계다(EXP-01).
+
+# -----------------------------------------------------------------------------
+# 평가 정합 기준 — scope별로 1회 정의하고 유형별로 반복하지 않는다
+# -----------------------------------------------------------------------------
+scope_policy:
+  sentence:   { match: sentence_id }
+  block:      { match: block_id }
+  section:    { match: section_id }
+  document:   { match: rule_id }
+  multi_span: { match: span_set_overlap, min_iou: 0.5 }
+  span_level: { match: char_offset_overlap, min_iou: 0.5 }   # FMT 계열 문자열 위반
+
+# =============================================================================
+# LAW — 법령 대조
+# =============================================================================
+rules:
+
+  LAW-01:
+    name: 인용 법령 부존재
+    criterion: 문서가 인용한 법령·조례명이 법제처 API 조회 결과에 존재하지 않는다.
+    judgment: rule
+    evidence: { source: cited_law }
+    scope: sentence
+    default_severity: must_fix
+    severity_basis: wrong_fact
+    depends_on: [text_normalize, citation_extract]
+    consumes: [moves.GROUNDS]
+    suppresses: [LAW-02, LAW-03, LAW-04]
+    synth: { tier: B, corrupt_fn: fabricate_law_name, variants: [nonexistent_word, plausible_compound, near_real_name] }
+    fix: none
+    examples:
+      positive:
+        - "「지방재정운영기본법」 제12조에 따라 예산을 편성함"
+        - "「공공기관 성과관리 촉진법」에 근거하여 추진함"
+      near_miss:
+        - "「지방재정법」 제33조에 따라 예산을 편성함"
+        - "「공공기관의 운영에 관한 법률」에 근거하여 추진함"
+
+  LAW-02:
+    name: 조문 번호 부존재
+    criterion: 법령은 존재하나 인용된 조·항·호 번호가 해당 법령의 조문 목록에 없다.
+    judgment: rule
+    evidence: { source: cited_law }
+    scope: sentence
+    default_severity: must_fix
+    severity_basis: wrong_fact
+    depends_on: [text_normalize, citation_extract]
+    consumes: [moves.GROUNDS]
+    suppresses: [LAW-04]
+    synth: { tier: A, corrupt_fn: perturb_article_number, variants: [digit_append, digit_shift, clause_add] }
+    fix: none
+    examples:
+      positive:
+        - "「지방재정법」 제333조에 따라 중기지방재정계획을 수립함"
+        - "「지방자치법」 제13조제99항에 근거함"
+      near_miss:
+        - "「지방재정법」 제33조에 따라 중기지방재정계획을 수립함"
+        - "「지방자치법」 제13조제2항에 근거함"
+
+  LAW-03:
+    name: 폐지·개정 전 법령 인용
+    criterion: 인용한 법령이 폐지되었거나, 문서 작성 시점에 이미 개정된 조문을 인용했다.
+    # 인용 내용과 현행 조문의 불일치는 LAW-04 소관이다. 여기는 폐지 여부와 시행일만 본다.
+    judgment: rule
+    evidence: { source: cited_law }
+    scope: sentence
+    default_severity: verify
+    severity_basis: external_dependent
+    depends_on: [text_normalize, citation_extract]
+    consumes: [moves.GROUNDS]
+    synth: { tier: C }
+    fix: none
+    examples:
+      positive:
+        - "「국가를 당사자로 하는 계약에 관한 법률 시행령」 개정 전 제26조에 따라 수의계약함"
+      near_miss:
+        - "「국가를 당사자로 하는 계약에 관한 법률 시행령」 제26조에 따라 수의계약함"
+
+  LAW-04:
+    name: 조문 내용 불일치
+    criterion: 인용된 조문이 실재하나, 문서가 서술한 조문의 취지·요건이 원문과 다르다.
+    judgment: model
+    evidence: { source: cited_law }
+    scope: sentence
+    default_severity: must_fix
+    severity_basis: wrong_fact
+    depends_on: [text_normalize, citation_extract]
+    consumes: [moves.GROUNDS]
+    threshold: { gate: retrieval_score, min_confidence: 0.7 }
+    synth: { tier: C }
+    fix: none
+    examples:
+      positive:
+        - "「지방재정법」 제33조에 따라 중기지방재정계획은 3년 단위로 수립함"
+      near_miss:
+        - "「지방재정법」 제33조에 따라 중기지방재정계획은 5년 단위로 수립함"
+
+  LAW-05:
+    name: 법적 근거 부재
+    criterion: 문서 전체에 사업의 법적·제도적 근거가 한 곳도 제시되지 않았다.
+    # 섹션이 아니라 문서 전역에서 본다(실측 법령 인용 217건 중 추진배경·근거 구간은 26.3%).
+    # 근거 법령이 없는 사업도 있으므로 must_fix 가 아닌 verify 다.
+    judgment: model
+    evidence: { source: manual, clause: "제2장 3항" }
+    scope: document
+    default_severity: verify
+    severity_basis: external_dependent
+    depends_on: [text_normalize, section_tag]
+    consumes: [moves.GROUNDS]
+    threshold: { gate: self_consistency, min_confidence: 0.7 }
+    synth: { tier: B, corrupt_fn: strip_legal_basis, variants: [remove_block, replace_with_policy_ref] }
+    fix: none
+    examples:
+      positive:
+        - "□ 추진 배경\n  ㅇ 시민 만족도 제고 필요성이 지속 제기됨"
+      near_miss:
+        - "□ 추진 배경\n  ㅇ 「지방자치법」 제13조에 따른 주민복지 증진 사무에 해당함"
+
+# =============================================================================
+# FMT — 형식·표기
+# =============================================================================
+
+  FMT-01:
+    name: 날짜 표기 규칙 위반
+    criterion: 날짜는 연·월·일 글자를 생략하고 온점과 공백으로 구분하며 끝에도 온점을 찍는다.
+    judgment: rule
+    evidence: { source: manual, clause: "제4장 3항" }
+    scope: sentence
+    default_severity: advisory
+    severity_basis: notation_only
+    depends_on: [text_normalize, sentence_split]
+    suppresses: [FMT-02]
+    synth: { tier: A, corrupt_fn: date_format, variants: [korean_full, no_space, no_trailing_dot, slash, two_digit_year] }
+    fix: transform
+    examples:
+      positive:
+        - "2021년 10월 25일까지 완료 예정"
+        - "2021.10.25 기준 집행률 82%"
+      near_miss:
+        - "2021. 10. 25. 기준 집행률 82%"
+        - "2021. 10. 25.(월) 개최 예정"
+
+  FMT-02:
+    name: 기간 표기 규칙 위반
+    criterion: 기간은 물결표(~)를 쓰고 앞뒤를 붙여 쓴다.
+    judgment: rule
+    evidence: { source: manual, clause: "제4장 3항" }
+    scope: sentence
+    default_severity: advisory
+    severity_basis: notation_only
+    depends_on: [text_normalize, sentence_split]
+    synth: { tier: A, corrupt_fn: period_format, variants: [space_around_tilde, hyphen, korean_buteo] }
+    fix: transform
+    examples:
+      positive:
+        - "2021. 9. 6. ~ 2021. 9. 15. 중 시행"
+        - "2021. 9. 6.-2021. 9. 15. 중 시행"
+      near_miss:
+        - "2021. 9. 6.~2021. 9. 15. 중 시행"
+        - "2021. 9. 6.부터 시행"
+
+  FMT-03:
+    name: 시간 표기 규칙 위반
+    criterion: 시간은 24시간제로 쓰고 쌍점(:)으로 구분한다.
+    judgment: rule
+    evidence: { source: manual, clause: "제4장 3항" }
+    scope: sentence
+    default_severity: advisory
+    severity_basis: notation_only
+    depends_on: [text_normalize, sentence_split]
+    synth: { tier: A, corrupt_fn: time_format, variants: [ampm_korean, dot_separator, korean_unit] }
+    fix: transform
+    examples:
+      positive:
+        - "오후 3시 20분 회의실에서 개최"
+        - "15.20에 개최"
+      near_miss:
+        - "15:20에 개최"
+        - "15:20~17:00 개최"
+
+  FMT-04:
+    name: 금액 한글 병기 누락
+    criterion: 본문·개조식 항목에 쓰인 금액에 한글 병기가 없다. 원문 표 내부 금액은 제외한다.
+    amount_scope:
+      include_tables: false
+      original_layout: 파싱 종류와 무관하게 원문 표 내부 수치를 제외한다.
+      origin_review: plans/dataset_v2/fmt04_origin_review.json
+      amount_only_unknown_layout: 원문상 본문인지 표인지 불명확한 독립 금액 블록은 보류한다.
+      unresolved_unit_or_relation: 금액 여부·단위·병기 대응을 확정할 수 없으면 판정을 보류한다.
+      non_monetary_numbers: 인원·건수·비율·날짜 등 금액이 아닌 수치는 제외한다.
+    judgment: rule
+    evidence: { source: manual, clause: "제4장 3항" }
+    scope: span_level
+    default_severity: advisory
+    severity_basis: notation_only
+    depends_on: [text_normalize]
+    synth: { tier: A, corrupt_fn: amount_hangul, variants: [drop_hangul, drop_geum_prefix, mismatch_hangul] }
+    fix: transform
+    examples:
+      positive:
+        - "총사업비 113,560,000원을 편성함"
+        - "총사업비 금113,560,000원을 편성함"
+      near_miss:
+        - "총사업비 금113,560,000원(금일억일천삼백오십육만원)을 편성함"
+        - "예산 규모는 전년 대비 12% 증가함"
+
+  FMT-05:
+    name: 법령명 홑낫표 누락
+    criterion: 법률·규정명은 홑낫표(「」) 또는 작은따옴표로 묶는다.
+    judgment: rule
+    evidence: { source: manual, clause: "제4장 3항" }
+    scope: sentence
+    default_severity: advisory
+    severity_basis: notation_only
+    depends_on: [text_normalize, citation_extract]
+    synth: { tier: A, corrupt_fn: law_bracket, variants: [drop_bracket, double_bracket, quotation_mark] }
+    fix: transform
+    examples:
+      positive:
+        - "지방재정법 제33조에 따라 계획을 수립함"
+        - "『지방재정법』 제33조에 따라 계획을 수립함"
+      near_miss:
+        - "「지방재정법」 제33조에 따라 계획을 수립함"
+        - "『지방재정 백서』를 참고하여 작성함"
+
+  FMT-06:
+    name: 대등 어구 가운뎃점 누락
+    criterion: 짧은 명사구 3개 이상을 쉼표 또는 빗금으로 나열했다.
+    # 용언이 있는 절의 나열은 대상이 아니다.
+    judgment: rule
+    evidence: { source: manual, clause: "제4장 3항" }
+    scope: sentence
+    default_severity: advisory
+    severity_basis: notation_only
+    depends_on: [text_normalize, sentence_split]
+    synth: { tier: A, corrupt_fn: enumeration_separator, variants: [comma, slash, space_only] }
+    fix: transform
+    examples:
+      positive:
+        - "가격, 품질, 납기를 종합 평가함"
+        - "가격/품질/납기를 종합 평가함"
+      near_miss:
+        - "가격·품질·납기를 종합 평가함"
+        - "본 사업은 가격 경쟁력을 확보하고, 품질 기준을 상향함"
+
+  FMT-07:
+    name: 실재하지 않는 날짜
+    criterion: 표기 형식은 맞으나 달력에 없는 날짜다.
+    judgment: rule
+    evidence: { source: manual, clause: "제4장 3항" }
+    scope: sentence
+    default_severity: must_fix
+    severity_basis: wrong_fact
+    depends_on: [text_normalize, sentence_split]
+    suppresses: [FMT-01, FMT-08]   # 없는 날짜는 요일을 계산할 수 없다
+    synth: { tier: A, corrupt_fn: invalid_date, variants: [day_overflow, month_overflow, leap_day] }
+    fix: none              # 어느 날짜가 맞는지 문서만으로 알 수 없다
+    examples:
+      positive:
+        - "2026. 2. 30. 까지 신청 접수"
+        - "2025. 13. 1. 사업 착수"
+      near_miss:
+        - "2026. 2. 28. 까지 신청 접수"
+        - "2024. 2. 29. 사업 착수"
+
+  FMT-08:
+    name: 날짜와 요일 불일치
+    criterion: 날짜에 병기된 요일이 그 날짜의 실제 요일과 다르다.
+    # 확정 날짜에 괄호 요일이 붙은 표기만 대상이다. 날짜 없이 요일만 쓴 표현은 대조할 수 없다.
+    judgment: rule
+    evidence: { source: manual, clause: "제4장 3항" }
+    scope: sentence
+    default_severity: must_fix
+    severity_basis: wrong_fact
+    depends_on: [text_normalize, sentence_split]
+    suppresses: [FMT-01]   # 형식 위반보다 값 오류를 먼저 보고한다
+    synth: { tier: A, corrupt_fn: weekday_mismatch, variants: [shift_weekday, shift_date, prev_year_calendar] }
+    fix: none              # 날짜가 틀린 것인지 요일이 틀린 것인지 문서만으로 알 수 없다
+    examples:
+      positive:
+        - "2026. 3. 18.(목) 주민 설명회 개최"
+        - "2026. 2. 28.(금)~2026. 3. 2.(월) 신청 접수"
+      near_miss:
+        - "2026. 3. 18.(수) 주민 설명회 개최"
+        - "2026. 3. 셋째 주(수) 주민 설명회 개최"
+
+  FMT-09:
+    name: 단위 표기 불일치
+    criterion: >
+      같은 표의 같은 열 또는 같은 문장에서 한 단위 계열의 서로 다른 단위가 섞여 쓰였거나,
+      명시된 단위 표기("단위: 천원")와 값에 붙은 단위가 다르다.
+    # 계열이 다른 단위(금액 vs 인원)의 혼용은 대상이 아니다. 계열 안에서만 비교한다.
+    # 단위 접미사나 단위 표기 없이 자릿수만 다른 경우는 잡지 않는다.
+    # 예산 열의 값은 원래 자릿수가 넓게 흩어져 자릿수만으로는 혼용과 구분되지 않는다.
+    # 표 구조 복원에 실패한 블록(warnings)은 대상에서 뺀다.
+    judgment: rule
+    evidence: { source: manual, clause: "제4장 3항" }
+    scope: multi_span
+    default_severity: must_fix
+    severity_basis: wrong_fact
+    depends_on: [text_normalize, block_tree]
+    threshold:
+      compare_key: table_column   # 표는 열 단위로, 본문은 문장 단위로 묶어 비교한다
+      unit_families:
+        amount:   [원, 천원, 만원, 백만원, 억원, 조원]
+        person:   [명, 인, 천명, 만명]
+        count:    [건, 개, 개소, 대, 동, 호]
+        area:     [㎡, ㎢, 평, 천㎡]
+        ratio:    ["%", "%p"]
+    synth: { tier: A, corrupt_fn: unit_mixup, variants: [rescale_cell, swap_unit_suffix, contradict_header] }
+    fix: none              # 어느 단위가 기준인지 문서만으로 정해지지 않는다
+    examples:
+      positive:
+        - "(단위: 천원) 인건비 45,000 / 운영비 12,000 / 홍보비 8,000,000원"
+        - "사업비는 1,200천원, 예비비는 300,000원으로 편성함"
+      near_miss:
+        - "(단위: 천원) 인건비 45,000 / 운영비 12,000 / 홍보비 8,000"
+        - "수혜자 1,200명, 사업비 1,200천원 규모로 추진함"
+
+# =============================================================================
+# STR — 구조·구성
+# =============================================================================
+
+  STR-01:
+    name: 항목 부호 체계 위반
+    criterion: 항목 부호는 1. → □ → ㅇ → - → · 순서를 따르며 층위를 건너뛸 수 없다. 층위는 들여쓰기가 아니라 부호로 판정한다.
+    judgment: rule
+    evidence: { source: manual, clause: "제4장 2항" }
+    scope: block
+    default_severity: must_fix
+    severity_basis: broken_hierarchy
+    depends_on: [text_normalize, block_tree]
+    synth: { tier: A, corrupt_fn: marker_sequence, variants: [skip_level, swap_marker, mixed_system] }
+    fix: transform
+    examples:
+      positive:
+        - "□ 추진 계획\n    - 1단계 사업 착수"
+        - "□ 추진 계획\n  1. 1단계 사업 착수"
+      near_miss:
+        - "□ 추진 계획\n  ㅇ 1단계 사업 착수"
+        - "1. 추진 계획\n  □ 1단계 사업 착수"
+
+  STR-03:
+    name: 필수 섹션 누락
+    criterion: 선택한 표준 목차(outline_id)에 정의된 섹션이 존재하지 않는다.
+    judgment: rule
+    evidence: { source: manual, clause: "제1장" }
+    scope: document
+    default_severity: must_fix
+    severity_basis: missing_required
+    depends_on: [text_normalize, section_tag]
+    consumes: [outline_id, sections.outlines]
+    threshold: { source: "sections.yaml#outlines[outline_id].required",
+                 skip_if: "outline_id == null" }
+    # 필수 슬롯과 any_of 슬롯의 단일 원본은 sections.yaml 이다.
+    # outline_id 가 null 이면(적용할 목차가 없거나 선택 불가) not_executable 로 두고 사유를 기록한다.
+    # 작성 목적이 기타이거나 주제가 빈 목록이라는 이유만으로 제외하지 않는다.
+    synth: { tier: A, corrupt_fn: drop_section, variants: [drop_one, drop_two] }
+    fix: none
+    examples:
+      positive:
+        - "(기획보고서) 제목 → 개요 → 추진 배경 → 해결 방안 → 행정 사항"
+      near_miss:
+        - "(기획보고서) 제목 → 개요 → 추진 배경 → 현황 및 문제점 → 해결 방안 → 기대 효과 → 행정 사항"
+
+  STR-04:
+    name: 섹션 순서 오류
+    criterion: 섹션이 모두 존재하나 선택한 표준 목차(outline_id)와 배열 순서가 다르다.
+    judgment: rule
+    evidence: { source: manual, clause: "제1장" }
+    scope: document
+    default_severity: advisory
+    severity_basis: quantity_or_order
+    depends_on: [text_normalize, section_tag]
+    consumes: [outline_id, sections.outlines]
+    threshold: { source: "sections.yaml#outlines[outline_id].order",
+                 exempt: "sections.yaml#unordered",
+                 skip_if: "outline_id == null" }
+    # 순서는 목차마다 다르다(행사교육 목차는 배경이 개요보다 앞).
+    # sections.yaml#unordered 의 태그와 해당 목차 order 에 없는 태그는 위치가 정해져 있지 않아 검사에서 뺀다.
+    # outline_id 가 null 이면 not_executable 로 두고 사유를 기록한다.
+    synth: { tier: A, corrupt_fn: reorder_section, variants: [adjacent_swap, move_to_end] }
+    fix: transform
+    examples:
+      positive:
+        - "(기획보고서) 제목 → 추진 배경 → 개요 → 현황 및 문제점 → 해결 방안 → 기대 효과 → 행정 사항"
+      near_miss:
+        - "(기획보고서) 제목 → 개요 → 추진 배경 → 현황 및 문제점 → 해결 방안 → 기대 효과 → 행정 사항"
+
+  STR-05:
+    name: 문장 길이 초과
+    criterion: 한 문장이 3줄을 넘는다.
+    judgment: rule
+    evidence: { source: manual, clause: "제4장 1항" }
+    scope: sentence
+    default_severity: advisory
+    severity_basis: quantity_or_order
+    depends_on: [text_normalize, sentence_split]
+    threshold: { max_chars: 110 }
+    # 근거 — 본문 폭 170mm ÷ 13pt 전각 4.59mm ≈ 37자/줄 × 3줄 = 111.
+    # 실측 한 줄 수용량도 중앙값 39자(표본 1,120)로 일치한다.
+    # 주의 — 블록 길이 ÷ line_count(32자)는 마지막 줄 편향으로 과소평가되므로 쓰지 않는다.
+    synth: { tier: B, corrupt_fn: sentence_merge, variants: [conjunction_join, subordinate_expand] }
+    fix: rewrite
+    examples:
+      positive:
+        - "본 사업은 관내 소상공인의 경영 안정을 지원하기 위하여 추진하는 것으로서, 2026년 상반기 중 신청을 접수하고 심사를 거쳐 대상자를 선정한 후 하반기부터 순차적으로 지원금을 교부할 예정이며, 필요시 추가 공고를 검토함"
+        - "관내 노후 상수도관 교체 사업은 2020년부터 단계적으로 추진되어 왔으나 예산 부족과 민원 발생으로 일부 구간이 지연되었고, 이에 따라 잔여 구간에 대한 공정을 재산정하여 추진 일정을 조정할 필요가 있음"
+      near_miss:
+        - "본 사업은 관내 소상공인의 경영 안정을 지원하기 위하여 2026년 상반기 중 신청을 접수하고, 심사를 거쳐 하반기부터 지원금을 교부할 예정임"
+        - "관내 노후 상수도관 교체 사업의 잔여 구간 공정을 재산정하여 추진 일정을 조정함"
+
+  STR-06:
+    name: 제목 길이 초과
+    criterion: 문서 제목이 20자를 넘는다.
+    judgment: rule
+    evidence: { source: manual, clause: "제2장 1항" }
+    scope: document   # 검사 대상은 표지 제목 하나다
+    default_severity: advisory
+    severity_basis: quantity_or_order
+    depends_on: [text_normalize, section_tag]
+    consumes: [sections.SEC_TITLE]
+    threshold: { max_chars: 20 }
+    synth: { tier: A, corrupt_fn: title_expand, variants: [append_modifier, append_scope] }
+    fix: rewrite
+    examples:
+      positive:
+        - "관내 소상공인 경영 안정 지원을 위한 2026년도 융자 지원 사업 추진 계획"
+      near_miss:
+        - "소상공인 경영 안정 융자 지원 계획"
+
+  STR-07:
+    name: 개요 분량 초과
+    criterion: 개요 섹션이 5개 항목을 넘거나 5줄을 넘는다.
+    # 항목 수와 줄 수를 함께 본다. 줄 수는 blocks[].line_count 합으로 센다.
+    judgment: rule
+    evidence: { source: manual, clause: "제2장 2항" }
+    scope: section
+    default_severity: advisory
+    severity_basis: quantity_or_order
+    depends_on: [text_normalize, section_tag, block_tree]
+    consumes: [sections.SEC_OVERVIEW]
+    threshold: { max_blocks: 5, max_lines: 5 }
+    synth: { tier: A, corrupt_fn: overview_expand, variants: [move_body_block, duplicate_detail] }
+    fix: rewrite
+    examples:
+      positive:
+        - "(개요 섹션에 8개 항목이 나열된 경우)"
+      near_miss:
+        - "(개요 섹션에 4개 항목이 나열된 경우)"
+
+  STR-08:
+    name: 본문 분량 초과
+    criterion: 붙임을 뺀 본문이 2페이지를 넘는다.
+    # 붙임은 세지 않는다. 법칙3 자체가 상세 내역을 붙임으로 빼라는 것이다.
+    # 실측 본문(붙임 제외) 중앙값 3p · 2p 초과 55%. 절반 이상이 걸리므로 advisory 다.
+    judgment: rule
+    evidence: { source: manual, clause: "제3장 법칙3" }
+    scope: document
+    default_severity: advisory
+    severity_basis: quantity_or_order
+    depends_on: [text_normalize, section_tag]
+    consumes: [sections.SEC_ANNEX]
+    threshold: { max_body_pages: 2 }
+    synth: { tier: A, corrupt_fn: inflate_body, variants: [duplicate_section, move_annex_inline] }
+    fix: none              # 무엇을 덜어낼지는 작성자가 정한다
+    examples:
+      positive:
+        - "(본문 6페이지, 붙임 없음)"
+      near_miss:
+        - "(본문 2페이지 + 붙임 8페이지)"
+
+# =============================================================================
+# CON — 문서 정합성
+# =============================================================================
+
+  CON-01:
+    name: 표 합계 불일치
+    criterion: 합계·계·총액으로 명시된 값이 같은 층위에 열거된 세부 값의 산술 합과 다르다.
+    judgment: rule
+    evidence: { source: internal }
+    scope: multi_span
+    default_severity: must_fix
+    severity_basis: wrong_fact
+    depends_on: [text_normalize, block_tree]
+    threshold: { tolerance: 0 }
+    synth: { tier: A, corrupt_fn: perturb_sum, variants: [alter_total, alter_detail, drop_row] }
+    fix: transform
+    examples:
+      positive:
+        - "세부: 40,000 / 35,000 / 20,000 · 합계: 100,000"
+      near_miss:
+        - "세부: 45,000 / 35,000 / 20,000 · 합계: 100,000"
+
+  CON-02:
+    name: 건수와 열거 항목 수 불일치
+    criterion: 본문에 명시된 건수와 실제 열거된 하위 항목 수가 다르다.
+    judgment: rule
+    evidence: { source: internal }
+    scope: multi_span
+    default_severity: must_fix
+    severity_basis: wrong_fact
+    depends_on: [text_normalize, block_tree]
+    threshold: { tolerance: 0 }
+    synth: { tier: A, corrupt_fn: perturb_count, variants: [alter_header_number, drop_item, add_item] }
+    fix: transform
+    examples:
+      positive:
+        - "□ 추진 과제 4건\n  ㅇ 과제 1\n  ㅇ 과제 2\n  ㅇ 과제 3"
+      near_miss:
+        - "□ 추진 과제 3건\n  ㅇ 과제 1\n  ㅇ 과제 2\n  ㅇ 과제 3"
+
+  CON-03:
+    name: 붙임 참조 불일치
+    criterion: 본문이 참조한 붙임 번호가 붙임 목록에 없거나, 목록에 있는 붙임이 본문에서 참조되지 않는다.
+    judgment: rule
+    evidence: { source: internal }
+    scope: multi_span
+    default_severity: verify
+    severity_basis: external_dependent
+    depends_on: [text_normalize, block_tree]
+    synth: { tier: A, corrupt_fn: perturb_attachment_ref, variants: [shift_ref_number, drop_list_item, orphan_ref] }
+    fix: none
+    examples:
+      positive:
+        - "세부 내역은 붙임 3 참조\n붙임 1. 사업 계획서  2. 예산 내역서"
+      near_miss:
+        - "세부 내역은 붙임 2 참조\n붙임 1. 사업 계획서  2. 예산 내역서"
+
+  CON-04:
+    name: 기간·일정 불일치
+    criterion: 같은 spec_field 로 기재된 기간 값이 문서 내 두 곳 이상에서 서로 다르다.
+    # move=SPEC 의 spec_field 가 같은 것끼리만 비교한다(사업기간 vs 집행기간은 제외).
+    judgment: rule
+    evidence: { source: internal }
+    scope: multi_span
+    default_severity: must_fix
+    severity_basis: wrong_fact
+    depends_on: [text_normalize, sentence_split]
+    consumes: [moves.SPEC.spec_field]
+    threshold: { tolerance_days: 0 }
+    synth: { tier: A, corrupt_fn: perturb_period, variants: [shift_start, shift_end, swap_order] }
+    fix: transform
+    examples:
+      positive:
+        - "사업 기간: 2026. 3. 1.~2026. 8. 31. / 일정표 종료: 2026. 9. 30."
+      near_miss:
+        - "사업 기간: 2026. 3. 1.~2026. 8. 31. / 일정표 종료: 2026. 8. 31."
+
+# =============================================================================
+# EXP — 표현 판단
+# =============================================================================
+
+  EXP-01:
+    name: 모호·추상 표현 사용
+    criterion: 정도·규모를 특정하지 않는 부사·형용사를 수치 근거 없이 사용했다.
+    judgment: rule
+    evidence: { source: manual, clause: "제3장 법칙5" }
+    scope: sentence
+    default_severity: advisory
+    severity_basis: weak_writing
+    depends_on: [text_normalize, sentence_split]
+    threshold:
+      lexicon: [상당히, 상당한, 매우, 크게, 대폭, 적극, 조속, 다수, 일부, 지속적으로, 획기적]
+    synth: { tier: A, corrupt_fn: vague_substitute, variants: [replace_quantity, replace_degree, prepend_adverb] }
+    fix: rewrite
+    examples:
+      positive:
+        - "만족도가 상당히 향상될 것으로 기대됨"
+        - "예산을 대폭 확대하여 추진함"
+      near_miss:
+        - "만족도가 전년 대비 12%p 향상될 것으로 기대됨"
+        - "예산을 전년 대비 8억원 확대하여 추진함"
+
+  EXP-02:
+    name: 개조식 종결 위반
+    criterion: 개조식 항목이 서술형 어미로 끝난다. 명세 나열은 대상이 아니다.
+    # 허용 목록이 아니라 금지 어미 목록으로 판정한다. 정상 명사형 어미는 열거할 수 없다.
+    # SPEC annotation 의 근거 구절(spec_items[].evidence_span)만 제외한다.
+    # 같은 블록의 다른 기능 구절은 검사한다. 블록 전체를 제외하지 않는다.
+    judgment: rule
+    evidence: { source: manual, clause: "제3장 법칙5" }
+    scope: sentence
+    default_severity: advisory
+    severity_basis: weak_writing
+    depends_on: [text_normalize, sentence_split, block_tree]
+    consumes: [moves.SPEC]
+    threshold:
+      forbidden_endings: ["습니다", "입니다", "됩니다", "합니다", "았습니다", "었습니다",
+                          "해요", "예요", "네요", "세요", "지요",
+                          "이다", "한다", "했다", "였다", "된다", "겠다", "있다", "없다"]
+    synth: { tier: A, corrupt_fn: ending_style, variants: [polite_form, declarative_da, present_tense] }
+    fix: transform
+    examples:
+      positive:
+        - "ㅇ 2026년 상반기부터 지원금을 교부할 예정입니다"
+        - "ㅇ 관계 부서와 협의하여 추진한다"
+      near_miss:
+        - "ㅇ 2026년 상반기부터 지원금 교부 예정임"
+        - "ㅇ 관계 부서 협의 후 추진"
+
+  EXP-03:
+    name: 두괄식 전개 위반
+    criterion: 섹션의 결론·용건이 앞이 아니라 배경·경과 서술 뒤에 배치되었다.
+    judgment: model
+    evidence: { source: manual, clause: "제3장 법칙2" }
+    scope: section
+    default_severity: advisory
+    severity_basis: weak_writing
+    depends_on: [text_normalize, section_tag, block_tree]
+    consumes: [sections.tag, moves.ACTION, moves.OUTCOME, moves.ASSESSMENT]
+    threshold: { gate: self_consistency, min_confidence: 0.7 }
+    synth: { tier: B, corrupt_fn: reorder_blocks, variants: [conclusion_to_end, reverse_order] }
+    fix: rewrite
+    examples:
+      positive:
+        - "ㅇ 2024년부터 민원이 지속 제기됨\n  ㅇ 관계 부서 협의를 3회 실시함\n  ㅇ 조례 개정을 추진하고자 함"
+      near_miss:
+        - "ㅇ 조례 개정을 추진하고자 함\n  ㅇ 2024년부터 민원이 지속 제기됨\n  ㅇ 관계 부서 협의를 3회 실시함"
+
+  EXP-04:
+    name: 기대 효과 정량 근거 결여
+    criterion: 기대 효과 섹션에 정량 지표가 하나도 제시되지 않았다.
+    judgment: model
+    evidence: { source: manual, clause: "제2장 5항" }
+    scope: section
+    default_severity: advisory
+    severity_basis: weak_writing
+    depends_on: [text_normalize, section_tag]
+    consumes: [sections.SEC_EFFECT, moves.EFFECT.step]
+    threshold: { gate: self_consistency, min_confidence: 0.7 }
+    synth: { tier: B, corrupt_fn: strip_metrics, variants: [remove_numbers, qualitative_rewrite] }
+    fix: rewrite
+    examples:
+      positive:
+        - "□ 기대 효과\n  ㅇ 시민 만족도 제고 및 행정 신뢰 향상"
+      near_miss:
+        - "□ 기대 효과\n  ㅇ 처리 기간 14일 → 7일 단축, 연간 3,200건 처리"
+
+  EXP-05:
+    name: 표 해설 부재
+    criterion: 표 앞뒤에 그 수치를 해석하는 서술이 없다.
+    # 표 앞뒤 구간에 서술 블록이 하나도 없을 때만 잡는다.
+    judgment: rule
+    evidence: { source: manual, clause: "제3장 법칙5" }
+    scope: multi_span
+    default_severity: advisory
+    severity_basis: weak_writing
+    depends_on: [text_normalize, block_tree, section_tag]
+    synth: { tier: A, corrupt_fn: strip_table_commentary, variants: [remove_following, remove_both] }
+    fix: rewrite
+    examples:
+      positive:
+        - "□ 예산 집행 현황\n  (표: 항목별 집행액)\n□ 향후 계획"
+      near_miss:
+        - "□ 예산 집행 현황\n  (표: 항목별 집행액)\n  ㅇ 홍보비 집행률이 62%로 가장 낮음"

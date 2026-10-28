@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RMA 파일럿 라벨링</title>
+<style>
+:root {
+  --bg: #f6f6f3; --panel: #fff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e3e2dc;
+  --accent: #2b59c3; --sel: #dbe6ff; --ok: #23663a; --ok-bg: #e6f3e9; --bad: #a12b1e; --bad-bg: #fbe3df;
+  --warn-bg: #fdf3d8; --dim: #a9a9a3;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.6 -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; color: var(--ink); background: var(--bg); }
+header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); padding: 8px 16px; }
+.toprow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+h1 { font-size: 15px; margin: 0; }
+#status { font-size: 12px; color: var(--muted); margin-left: auto; }
+#tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.tab { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 3px 9px; cursor: pointer; font-size: 13px; }
+.tab.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.tab.done { background: var(--ok-bg); }
+.tab small { color: var(--muted); margin-left: 4px; }
+main { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(400px, 1fr); gap: 12px; padding: 12px 16px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+#doc { padding: 12px 16px; height: calc(100vh - 110px); overflow: auto; }
+#side { height: calc(100vh - 110px); overflow: auto; padding: 12px; }
+.blk { display: grid; grid-template-columns: 78px 1fr; gap: 8px; padding: 3px 4px; border-radius: 4px; }
+.bmeta { font: 11px/1.5 ui-monospace, Menlo, monospace; color: var(--muted); text-align: right; padding-top: 2px; white-space: pre-line; overflow-wrap: anywhere; }
+.txt { white-space: pre-wrap; word-break: break-word; }
+.blk.ctx .txt, .blk.ctx td { color: var(--dim); }
+.blk.target { cursor: pointer; border-left: 3px solid var(--line); }
+.blk.target.ok { border-left-color: #8cc79c; }
+.blk.target.bad { border-left-color: #e3a097; }
+.blk.focus { background: var(--sel); }
+.sechead { margin-top: 10px; font-weight: 600; }
+table.grid { border-collapse: collapse; font-size: 13px; width: 100%; }
+table.grid td { border: 1px solid var(--line); padding: 2px 5px; vertical-align: top; white-space: pre-wrap; }
+table.grid td.inh { color: var(--dim); font-style: italic; }
+table.grid td.hdr { background: #f1f0ea; font-weight: 600; }
+table.grid tr.focus td { background: var(--sel); }
+table.grid td.rn { width: 34px; text-align: center; color: var(--muted); cursor: pointer; font: 11px ui-monospace, Menlo, monospace; }
+table.grid tr.ok td.rn { background: var(--ok-bg); }
+table.grid tr.bad td.rn { background: var(--bad-bg); }
+.note { font-size: 12px; color: var(--muted); }
+.issues { font-size: 12px; color: var(--bad); background: var(--bad-bg); border-radius: 6px; padding: 4px 8px; margin: 6px 0; }
+.issues div { margin: 1px 0; }
+.okmsg { font-size: 12px; color: var(--ok); background: var(--ok-bg); border-radius: 6px; padding: 4px 8px; margin: 6px 0; }
+.pending { position: sticky; top: -12px; z-index: 2; background: var(--warn-bg); border: 1px solid #ecd9a4; border-radius: 6px; padding: 5px 8px; margin-bottom: 8px; font-size: 13px; }
+.ann { border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; margin: 8px 0; }
+.ann h4 { margin: 0 0 4px; font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 4px 0; }
+.lbl { font-size: 12px; color: var(--muted); min-width: 64px; }
+.quote { background: #f1f0ea; border-radius: 4px; padding: 0 5px; font-size: 13px; }
+.def { font-size: 12px; color: var(--muted); margin: 2px 0 4px; }
+select, input[type=text] { font: inherit; font-size: 13px; border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px; background: #fff; }
+input[type=text] { min-width: 160px; }
+button { font: inherit; font-size: 12px; border: 1px solid var(--line); background: #fff; border-radius: 5px; padding: 2px 8px; cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { color: var(--bad); }
+.refs { border-top: 1px dashed var(--line); margin-top: 10px; padding-top: 8px; }
+.ref { font-size: 12px; background: #fafaf7; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; margin: 4px 0; }
+.diff { color: var(--bad); font-weight: 600; }
+h3 { font-size: 14px; margin: 4px 0 8px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="toprow">
+    <h1>RMA 파일럿 라벨링</h1>
+    <span id="who" class="note"></span>
+    <label class="note" id="difflabel" hidden><input type="checkbox" id="onlydiff"> 판정이 다른 단위만</label>
+    <span id="status">불러오는 중…</span>
+  </div>
+  <div id="tabs"></div>
+</header>
+<main>
+  <section id="doc" class="card"></section>
+  <aside id="side" class="card"></aside>
+</main>
+<script>
+"use strict";
+let S = null;          // 서버 상태
+let D = 0;             // 현재 문서 번호
+let L = {};            // 문서별 편집 중인 라벨
+let focus = null;      // {block_id, row} (row는 표일 때만)
+let pending = null;    // 마지막으로 드래그한 근거 {block_id, row, col, quote, occurrence}
+const pendingSaves = new Map();  // 문서별 최신 편집. 성공한 저장만 제거한다.
+let saveQueue = Promise.resolve();
+const KIND = { document_title: "제목", heading: "제목", item: "항목", para: "문단", note: "주석", attachment: "붙임", table: "표" };
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const el = (tag, attrs = {}, ...kids) => {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined && v !== false) node.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false) node.append(kid);
+  return node;
+};
+const doc = () => S.documents[D];
+const block = (id) => doc().blocks.find((b) => b.id === id);
+const lab = () => L[doc().meta.document_id];
+
+// ---- 라벨 상태 <-> 응답 ------------------------------------------------------
+
+function emptySpan(span) { return span ? { quote: span.quote, occurrence: span.occurrence ?? null, row: span.row ?? null, col: span.col ?? null } : null; }
+
+function fromSaved(d) {
+  const out = { document: null, blocks: {} };
+  const saved = d.saved || {};
+  out.document = saved.document_response ? JSON.parse(JSON.stringify(saved.document_response)) : null;
+  for (const response of Object.values(saved.block_responses || {})) {
+    for (const b of response.blocks || []) {
+      const unit = { primary: null, annotations: b.annotations || [] };
+      unit.primary = indexOf(unit.annotations, b.primary_annotation_id);
+      if (b.table) {
+        const rows = {};
+        for (const r of b.table.rows || []) {
+          rows[r.row] = { role: r.role, annotations: r.annotations || [], primary: indexOf(r.annotations || [], r.primary_annotation_id) };
+        }
+        out.blocks[b.block_id] = { table: { table_status: b.table.table_status, table_reason: b.table.table_reason,
+          header_rows: b.table.header_rows || [], row_header_cols: b.table.row_header_cols || [], rows } };
+      } else {
+        out.blocks[b.block_id] = unit;
+      }
+    }
+  }
+  return out;
+}
+function indexOf(anns, id) { const i = anns.findIndex((a) => a.annotation_id === id); return i < 0 ? null : i; }
+
+function unitOf(blockId, row) {
+  const b = block(blockId);
+  const store = lab().blocks;
+  if (b.kind === "table") {
+    store[blockId] ??= { table: { table_status: "labeled", table_reason: null, header_rows: [], row_header_cols: [], rows: {} } };
+    const t = store[blockId].table;
+    if (row === undefined || row === null) return t;
+    t.rows[row] ??= { role: allEmpty(b.rows[row]) ? "empty" : null, annotations: [], primary: null };
+    return t.rows[row];
+  }
+  store[blockId] ??= { primary: null, annotations: [] };
+  return store[blockId];
+}
+function allEmpty(cells) { return cells.every((c) => !c.text.trim() || c.inherited_from); }
+
+function setStepStatus(a, status) {
+  a.step_status = status;
+  if (status === "determined" || status === "not_applicable") a.step_reason = null;
+}
+function setMove(a, move) {
+  a.move = move;
+  a.steps = [];
+  a.step_reason = null;
+  setStepStatus(a, S.moves[move]?.steps.length ? "undetermined" : "not_applicable");
+}
+function setTableStatus(t, status) {
+  t.table_status = status;
+  if (status === "labeled") t.table_reason = null;
+  // 행 편집은 현재 화면에서만 보존한다. unreadable의 저장 응답에는 rows=[]를 쓴다.
+}
+
+function annotationsOut(anns, prefix) {
+  return anns.map((a, i) => ({
+    annotation_id: `${prefix}a${i + 1}`,
+    move: a.move,
+    evidence_span: emptySpan(a.evidence_span),
+    context_block_ids: a.context_block_ids || [],
+    steps: (a.steps || []).map((s) => ({ step: s.step, evidence_span: emptySpan(s.evidence_span) })),
+    step_status: a.step_status,
+    step_reason: ["determined", "not_applicable"].includes(a.step_status) ? null : (a.step_reason || null),
+    undetermined_reason: a.move === "UNDETERMINED" ? (a.undetermined_reason || null) : null,
+    spec_items: a.move === "SPEC" ? (a.spec_items || []).map((it) => ({
+      spec_field: it.spec_field || null, raw_label: it.raw_label || "", value: it.value || "",
+      evidence_span: emptySpan(it.evidence_span), label_span: emptySpan(it.label_span), reason: it.reason || null })) : [],
+  }));
+}
+
+function blockOut(blockId) {
+  const b = block(blockId);
+  if (b.kind !== "table") {
+    const u = unitOf(blockId);
+    return { block_id: blockId, primary_annotation_id: u.primary === null ? null : `a${u.primary + 1}`,
+      annotations: annotationsOut(u.annotations, ""), table: null };
+  }
+  const t = unitOf(blockId);
+  const rows = t.table_status === "unreadable" ? [] : b.rows.map((_, r) => {
+    const u = unitOf(blockId, r);
+    return { row: r, role: u.role, primary_annotation_id: u.primary === null || u.role !== "body" ? null : `r${r}.a${u.primary + 1}`,
+      annotations: u.role === "body" ? annotationsOut(u.annotations, `r${r}.`) : [] };
+  });
+  return { block_id: blockId, primary_annotation_id: null, annotations: [],
+    table: { table_status: t.table_status, table_reason: t.table_status === "labeled" ? null : (t.table_reason || null), header_rows: t.header_rows,
+      row_header_cols: t.row_header_cols, rows } };
+}
+
+function responses() {
+  const out = {};
+  for (const req of doc().requests) {
+    out[req.request_id] = { schema_version: "rma-block-response-1", request_id: req.request_id,
+      blocks: req.target_ids.map(blockOut) };
+  }
+  return out;
+}
+
+function documentOut() {
+  const d = lab().document || {};
+  const topics = d.document_topics === undefined ? [] : d.document_topics;
+  return {
+    schema_version: "rma-doc-response-1",
+    request_id: doc().document_request.request_id,
+    document_type: d.document_type ?? null,
+    document_type_evidence: d.document_type ? (d.document_type_evidence || null) : null,
+    document_type_reason: d.document_type ? null : (d.document_type_reason || null),
+    document_topics: topics,
+    document_topics_evidence: topics ? (d.document_topics_evidence || []).filter((e) => topics.includes(e.topic)) : [],
+    document_topics_reason: topics === null ? (d.document_topics_reason || null) : null,
+    outline_id: d.outline_id ?? null,
+    outline_reason: d.outline_reason || "",
+  };
+}
+
+// ---- 저장 ---------------------------------------------------------------------
+
+function changed() {
+  const d = doc();
+  const id = d.meta.document_id;
+  clearTimeout(pendingSaves.get(id)?.timer);
+  // 선택 문서가 바뀌기 전에 원래 문서의 내용을 직렬화한다.
+  const entry = { d, body: JSON.stringify({ document_id: id, snapshot_id: d.meta.snapshot.snapshot_id,
+    document_response: documentOut(), block_responses: responses() }), error: null };
+  pendingSaves.set(id, entry);
+  entry.timer = setTimeout(() => { saveQueue = saveQueue.then(() => save(entry)); }, 700);
+  saveStatus();
+  renderSide();
+}
+
+function saveStatus() {
+  const failed = [...pendingSaves.values()].find((entry) => entry.error);
+  $("#status").textContent = failed ? `저장 실패: ${failed.d.meta.title || failed.d.meta.document_id} — ${failed.error}`
+    : pendingSaves.size ? `저장 대기… (${pendingSaves.size}문서)` : `저장됨 ${new Date().toLocaleTimeString()}`;
+}
+
+async function save(entry) {
+  const { d, body } = entry;
+  const id = d.meta.document_id;
+  if (pendingSaves.get(id) !== entry) return;
+  try {
+    const res = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
+    if (pendingSaves.get(id) === entry) {
+      d.check = out;
+      pendingSaves.delete(id);
+      renderTabs(); renderDoc(); renderSide();
+    }
+  } catch (error) {
+    entry.error = error.message;
+  }
+  saveStatus();
+}
+
+window.addEventListener("beforeunload", (event) => {
+  if (pendingSaves.size) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
+
+// ---- 근거 선택 -----------------------------------------------------------------
+
+function occurrence(text, quote, start) {
+  const starts = [];
+  for (let i = text.indexOf(quote); i >= 0; i = text.indexOf(quote, i + 1)) starts.push(i);
+  return starts.length > 1 ? starts.indexOf(start) + 1 : null;
+}
+
+document.addEventListener("mouseup", () => {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  if (range.startContainer !== range.endContainer || range.startContainer.nodeType !== 3) return;
+  const holder = range.startContainer.parentElement;
+  const host = holder.closest("[data-bid]");
+  if (!host || !$("#doc").contains(host)) return;
+  const text = range.startContainer.textContent;
+  const start = range.startOffset;
+  const quote = text.slice(start, range.endOffset);
+  if (!quote.trim()) return;
+  let row = holder.dataset.r === undefined ? null : Number(holder.dataset.r);
+  let col = holder.dataset.c === undefined ? null : Number(holder.dataset.c);
+  if (holder.dataset.inh) [row, col] = JSON.parse(holder.dataset.inh); // 덮인 셀은 시작 셀로 바꾼다
+  pending = { block_id: host.dataset.bid, row, col, quote, occurrence: occurrence(text, quote, start) };
+  // 드래그한 블록(표는 그 행)을 바로 편집 대상으로 잡는다. 열 제목 행을 고르면 표 전체를 연다
+  const b = block(host.dataset.bid);
+  if (b.target) {
+    const t = b.kind === "table" ? lab().blocks[b.id]?.table : null;
+    const r = b.kind !== "table" ? null : (t && t.header_rows.includes(row) ? (focus?.block_id === b.id ? focus.row : null) : row);
+    if (!focus || focus.block_id !== b.id || (b.kind === "table" && focus.row !== r)) { focus = { block_id: b.id, row: r }; renderDoc(); }
+  }
+  renderSide();
+});
+
+function pickCell(blockId, r, c, cell) {
+  const [row, col] = cell.inherited_from || [r, c];
+  const text = block(blockId).rows[row][col].text;
+  if (!text) return;
+  pending = { block_id: blockId, row, col, quote: text, occurrence: null };
+}
+
+function takePending(needBlock) {
+  if (!pending) { alert("먼저 왼쪽 원문에서 근거 구절을 드래그하세요."); return null; }
+  if (needBlock && pending.block_id !== needBlock) { alert("근거는 이 블록 안에서 골라야 합니다."); return null; }
+  return { quote: pending.quote, occurrence: pending.occurrence, row: pending.row, col: pending.col };
+}
+
+// ---- 왼쪽: 문서 ----------------------------------------------------------------
+
+function unitIssues(blockId, row) {
+  const all = doc().check.blocks[blockId] || [];
+  if (row === undefined) return all;
+  return all.filter((i) => i.path.includes(`.rows[${row}]`) || !i.path.includes(".rows["));
+}
+
+function differs(blockId, row) {
+  if (!S.references.length) return false;
+  const sig = (name) => {
+    const ref = refUnit(name, blockId, row);
+    return ref ? JSON.stringify(ref.annotations.map((a) => [a.move, (a.steps || []).map((s) => s.step).sort()]).sort()) : "없음";
+  };
+  return new Set(S.references.map(sig)).size > 1;
+}
+
+function renderDoc() {
+  const d = doc();
+  const root = $("#doc");
+  const scroll = root.scrollTop;
+  root.replaceChildren(el("h3", {}, d.meta.title || d.meta.document_id),
+    el("div", { class: "note" }, `${d.meta.category} · ${d.meta.sections ? `파일럿 구간 ${d.meta.sections.length}개` : "전체 구간"} · 판정 단위 ${d.meta.units}개. 진한 블록만 판정 대상이고 흐린 블록은 문맥이다.`));
+  const onlyDiff = $("#onlydiff").checked;
+  for (const b of d.blocks) {
+    if (b.section_tag) root.append(el("div", { class: "sechead note" }, `── ${b.section_tag}`));
+    const meta = el("div", { class: "bmeta" }, `${KIND[b.kind] || b.kind}\n${b.id.split("_").pop()}`);
+    if (b.kind === "table") {
+      const t = d.blocks.length && lab().blocks[b.id]?.table;
+      const grid = el("table", { class: "grid", "data-bid": b.id });
+      b.rows.forEach((cells, r) => {
+        if (onlyDiff && b.target && !differs(b.id, r)) return;
+        const issues = b.target ? unitIssues(b.id, r) : [];
+        const cls = [focus && focus.block_id === b.id && focus.row === r ? "focus" : "", b.target ? (issues.length ? "bad" : "ok") : ""].join(" ");
+        const tr = el("tr", { class: cls });
+        tr.append(el("td", { class: "rn", onclick: () => b.target && setFocus(b.id, r) }, `${r}`));
+        cells.forEach((cell, c) => {
+          const hdr = t && (t.header_rows.includes(r) || t.row_header_cols.includes(c));
+          tr.append(el("td", { class: [cell.inherited_from ? "inh" : "", hdr ? "hdr" : ""].join(" "),
+            "data-r": r, "data-c": c, "data-inh": cell.inherited_from ? JSON.stringify(cell.inherited_from) : null,
+            ondblclick: () => { pickCell(b.id, r, c, cell); renderSide(); } }, cell.text));
+        });
+        grid.append(tr);
+      });
+      const status = b.target ? "" : el("div", { class: "note" }, b.status === "not_targeted" || b.status === "unreadable" ? `표 상태: ${b.status} (${b.reason})` : "문맥");
+      root.append(el("div", { class: `blk ${b.target ? "" : "ctx"}` }, meta, el("div", {}, grid, status)));
+      continue;
+    }
+    if (onlyDiff && b.target && !differs(b.id)) continue;
+    const issues = b.target ? unitIssues(b.id) : [];
+    const cls = ["blk", b.target ? "target" : "ctx", b.target ? (issues.length ? "bad" : "ok") : "", focus && focus.block_id === b.id ? "focus" : ""].join(" ");
+    root.append(el("div", { class: cls, onclick: (e) => { if (b.target && window.getSelection().isCollapsed) setFocus(b.id); } },
+      meta, el("div", { class: "txt", "data-bid": b.id }, b.text)));
+  }
+  root.scrollTop = scroll;
+}
+
+function setFocus(blockId, row = null) { focus = { block_id: blockId, row }; renderDoc(); renderSide(); }
+
+// ---- 오른쪽: 편집 ---------------------------------------------------------------
+
+function renderSide() {
+  const side = $("#side");
+  const scroll = side.scrollTop;
+  side.replaceChildren();
+  if (pending) {
+    const where = pending.row === null ? pending.block_id.split("_").pop() : `${pending.block_id.split("_").pop()} [${pending.row},${pending.col}]`;
+    side.append(el("div", { class: "pending" }, "선택한 근거: ", el("span", { class: "quote" }, pending.quote),
+      ` (${where}${pending.occurrence ? `, ${pending.occurrence}번째` : ""})`));
+  }
+  side.append(el("div", { class: "row" },
+    el("button", { onclick: () => { focus = null; renderDoc(); renderSide(); } }, "문서 단위 판정"),
+    el("span", { class: "note" }, "원문을 드래그해 근거를 고르고, 표 셀은 더블클릭하면 셀 전체가 근거가 된다.")));
+  if (!focus) renderDocumentPanel(side);
+  else if (focus.row === null || focus.row === undefined) renderUnit(side, focus.block_id);
+  else renderTableRow(side, focus.block_id, focus.row);
+  side.scrollTop = scroll;
+}
+
+function issueBox(issues) {
+  if (!issues.length) return el("div", { class: "okmsg" }, "검증 통과");
+  return el("div", { class: "issues" }, issues.map((i) => el("div", {}, `${i.code} ${i.path}: ${i.message}`)));
+}
+
+function renderDocumentPanel(side) {
+  const d = lab().document ??= { document_topics: [] };
+  const opts = (values, current, none) => [el("option", { value: "", selected: current === null || current === undefined }, none),
+    ...values.map((v) => el("option", { value: v, selected: v === current }, v))];
+  const evidenceRow = (label, span, set) => el("div", { class: "row" }, el("span", { class: "lbl" }, label),
+    span ? el("span", { class: "quote" }, `${span.block_id.split("_").pop()}: ${span.quote}`) : el("span", { class: "note" }, "근거 없음"),
+    el("button", { onclick: () => { if (!pending) return alert("먼저 근거를 드래그하세요."); set({ block_id: pending.block_id, quote: pending.quote, occurrence: pending.occurrence }); changed(); } }, "선택 구절로"));
+  side.append(el("h3", {}, "문서 단위 판정"), issueBox(doc().check.document));
+  side.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "작성 목적"),
+    el("select", { onchange: (e) => { d.document_type = e.target.value || null; changed(); } }, opts(S.document_types, d.document_type, "판정 불가"))));
+  if (d.document_type) side.append(evidenceRow("근거", d.document_type_evidence, (v) => d.document_type_evidence = v));
+  else side.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "사유"),
+    el("input", { type: "text", value: d.document_type_reason || "", onchange: (e) => { d.document_type_reason = e.target.value; changed(); } })));
+  const topicsUnknown = d.document_topics === null;
+  side.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "업무 주제"),
+    ...S.document_topics.map((t) => el("label", {}, el("input", { type: "checkbox", disabled: topicsUnknown, checked: !topicsUnknown && d.document_topics.includes(t),
+      onchange: (e) => { d.document_topics = e.target.checked ? [...d.document_topics, t] : d.document_topics.filter((x) => x !== t); changed(); } }), t)),
+    el("label", {}, el("input", { type: "checkbox", checked: topicsUnknown, onchange: (e) => { d.document_topics = e.target.checked ? null : []; changed(); } }), "판단 불가")));
+  if (topicsUnknown) side.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "사유"),
+    el("input", { type: "text", value: d.document_topics_reason || "", onchange: (e) => { d.document_topics_reason = e.target.value; changed(); } })));
+  else for (const t of d.document_topics) {
+    d.document_topics_evidence ??= [];
+    const current = d.document_topics_evidence.find((e) => e.topic === t);
+    side.append(evidenceRow(`${t} 근거`, current?.evidence_span, (v) => {
+      d.document_topics_evidence = d.document_topics_evidence.filter((e) => e.topic !== t).concat([{ topic: t, evidence_span: v }]);
+    }));
+  }
+  side.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "표준 목차"),
+    el("select", { onchange: (e) => { d.outline_id = e.target.value || null; changed(); } }, opts(doc().document_request.outline_ids, d.outline_id, "없음·선택 불가"))));
+  side.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "목차 근거"),
+    el("input", { type: "text", value: d.outline_reason || "", onchange: (e) => { d.outline_reason = e.target.value; changed(); } })));
+  side.append(el("p", { class: "note" }, "목적이나 주제만으로 목차를 고르지 않는다. 적용할 목차가 없으면 '없음'을 고르고 사유를 적는다."));
+  renderReferences(side, (name) => S.documents[D].references[name]?.document_response, (ref) => el("div", {},
+    `목적 ${ref.document_type ?? "판정 불가"} · 주제 ${ref.document_topics === null ? "판단 불가" : (ref.document_topics.join(", ") || "없음")} · 목차 ${ref.outline_id ?? "없음"}`),
+    (ref) => { lab().document = JSON.parse(JSON.stringify(ref)); });
+}
+
+function renderUnit(side, blockId) {
+  const b = block(blockId);
+  if (b.kind === "table") return renderTable(side, blockId);
+  const u = unitOf(blockId);
+  side.append(el("h3", {}, `${b.kind} ${blockId.split("_").pop()}`), el("div", { class: "txt quote" }, b.text), issueBox(unitIssues(blockId)));
+  if (b.kind === "heading" && !u.annotations.length) side.append(el("p", { class: "note" }, "기능이 없으면 구간 이름만 있는 제목으로 저장된다."));
+  renderAnnotations(side, u, blockId, null);
+  renderReferences(side, (name) => refUnit(name, blockId), summarize, (ref) => { lab().blocks[blockId] = copyUnit(ref); });
+}
+
+function renderTable(side, blockId) {
+  const b = block(blockId);
+  const t = unitOf(blockId);
+  side.append(el("h3", {}, `표 ${blockId.split("_").pop()}`), issueBox(unitIssues(blockId).filter((i) => !i.path.includes(".rows["))));
+  side.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "표 상태"),
+    el("select", { onchange: (e) => { setTableStatus(t, e.target.value); changed(); } },
+      ["labeled", "unreadable"].map((v) => el("option", { value: v, selected: t.table_status === v }, v === "labeled" ? "행 단위로 판정" : "읽을 수 없음")))));
+  if (t.table_status === "unreadable") {
+    side.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "사유"),
+      el("input", { type: "text", value: t.table_reason || "", onchange: (e) => { t.table_reason = e.target.value; changed(); } })));
+    side.append(el("p", { class: "note" }, "읽을 수 없음으로 저장한 뒤 화면을 다시 열면 이전 행 판정은 복원되지 않습니다."));
+    return;
+  }
+  const toggle = (list, v) => list.includes(v) ? list.filter((x) => x !== v) : [...list, v].sort((a, c) => a - c);
+  side.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "열 제목 행"),
+    ...b.rows.map((_, r) => el("label", {}, el("input", { type: "checkbox", checked: t.header_rows.includes(r),
+      onchange: () => { t.header_rows = toggle(t.header_rows, r); const u = unitOf(blockId, r); u.role = t.header_rows.includes(r) ? "header" : (u.role === "header" ? null : u.role); changed(); renderDoc(); } }), r))));
+  side.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "행 제목 열"),
+    ...b.rows[0].map((_, c) => el("label", {}, el("input", { type: "checkbox", checked: t.row_header_cols.includes(c),
+      onchange: () => { t.row_header_cols = toggle(t.row_header_cols, c); changed(); renderDoc(); } }), c))));
+  side.append(el("p", { class: "note" }, "왼쪽 표의 행 번호를 눌러 행을 판정한다."));
+}
+
+function renderTableRow(side, blockId, r) {
+  renderTable(side, blockId);
+  const t = unitOf(blockId);
+  if (t.table_status === "unreadable") return;
+  const b = block(blockId);
+  const u = unitOf(blockId, r);
+  side.append(el("h3", {}, `행 ${r}`), el("div", { class: "quote" }, b.rows[r].map((c) => c.text).join(" | ")), issueBox(unitIssues(blockId, r).filter((i) => i.path.includes(`.rows[`))));
+  side.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "행 역할"),
+    el("select", { onchange: (e) => { u.role = e.target.value || null; if (u.role === "header" && !t.header_rows.includes(r)) t.header_rows = [...t.header_rows, r].sort((a, c) => a - c); changed(); renderDoc(); } },
+      [["", "선택"], ["body", "본문 행"], ["header", "열 제목 행"], ["empty", "빈 행"]].map(([v, n]) => el("option", { value: v, selected: (u.role || "") === v }, n)))));
+  if (u.role === "body") renderAnnotations(side, u, blockId, r);
+  renderReferences(side, (name) => refUnit(name, blockId, r), summarize, (ref) => { t.rows[r] = copyUnit(ref); });
+}
+
+function renderAnnotations(side, u, blockId, row) {
+  const moves = S.moves;
+  side.append(el("div", { class: "row" },
+    el("button", { class: "primary", onclick: () => {
+      const span = takePending(blockId); if (!span) return;
+      u.annotations.push({ move: "", evidence_span: span, context_block_ids: [], steps: [], step_status: "not_applicable", step_reason: null, undetermined_reason: null, spec_items: [] });
+      if (u.annotations.length === 1) u.primary = 0;
+      changed(); } }, "선택 구절로 기능 추가"),
+    el("label", { class: "note" }, el("input", { type: "radio", name: "primary", checked: u.primary === null, onchange: () => { u.primary = null; changed(); } }), "주 기능 없음(대등)")));
+  u.annotations.forEach((a, i) => {
+    const m = moves[a.move];
+    const card = el("div", { class: "ann" });
+    card.append(el("h4", {}, el("input", { type: "radio", name: "primary", checked: u.primary === i, title: "주 기능", onchange: () => { u.primary = i; changed(); } }),
+      `기능 ${i + 1}`,
+      el("select", { onchange: (e) => { setMove(a, e.target.value); changed(); } },
+        el("option", { value: "" }, "Move 선택"), Object.entries(moves).map(([k, v]) => el("option", { value: k, selected: a.move === k }, `${k} ${v.name}`))),
+      el("button", { class: "danger", onclick: () => { u.annotations.splice(i, 1); if (u.primary === i) u.primary = null; else if (u.primary > i) u.primary -= 1; changed(); } }, "삭제")));
+    if (m) card.append(el("div", { class: "def" }, [m.goal, m.boundary].filter(Boolean).join(" / ")));
+    card.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "근거"), el("span", { class: "quote" }, a.evidence_span.quote + (a.evidence_span.row !== null && a.evidence_span.row !== undefined ? ` [${a.evidence_span.row},${a.evidence_span.col}]` : "")),
+      el("button", { onclick: () => { const s = takePending(blockId); if (s) { a.evidence_span = s; changed(); } } }, "선택 구절로 바꾸기")));
+    if (m && m.steps.length) {
+      card.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "Step"),
+        ...m.steps.map((st) => {
+          const has = a.steps.find((s) => s.step === st);
+          return el("label", { title: has ? has.evidence_span.quote : "" }, el("input", { type: "checkbox", checked: !!has, onchange: (e) => {
+            if (e.target.checked) { const s = takePending(blockId); if (!s) { e.target.checked = false; return; } a.steps.push({ step: st, evidence_span: s }); }
+            else a.steps = a.steps.filter((s) => s.step !== st);
+            if (a.step_status === "undetermined" && a.steps.length) setStepStatus(a, "determined");
+            if (!a.steps.length && (a.step_status === "determined" || a.step_status === "partial")) setStepStatus(a, "undetermined");
+            changed(); } }), st);
+        })));
+      for (const s of a.steps) card.append(el("div", { class: "note" }, `${s.step} 근거: `, el("span", { class: "quote" }, s.evidence_span.quote)));
+      card.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "Step 상태"),
+        el("select", { onchange: (e) => { setStepStatus(a, e.target.value); changed(); } },
+          [["determined", "판정 완료"], ["partial", "일부 판정"], ["undetermined", "판정 불가"]].map(([v, n]) => el("option", { value: v, selected: a.step_status === v }, n))),
+        a.step_status === "partial" || a.step_status === "undetermined" ? el("input", { type: "text", placeholder: "미확정 사유", value: a.step_reason || "", onchange: (e) => { a.step_reason = e.target.value; changed(); } }) : null));
+    }
+    if (a.move === "UNDETERMINED") {
+      card.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "사유"),
+        el("select", { onchange: (e) => { a.undetermined_reason = e.target.value || null; changed(); } },
+          el("option", { value: "" }, "선택"), S.undetermined_reasons.map((r) => el("option", { value: r, selected: a.undetermined_reason === r }, r)))));
+    }
+    if (a.move === "SPEC") {
+      a.spec_items ??= [];
+      card.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "명세 항목"),
+        el("button", { onclick: () => { const s = takePending(blockId); if (!s) return; a.spec_items.push({ spec_field: null, raw_label: "", value: s.quote, evidence_span: s, label_span: null, reason: null }); changed(); } }, "선택 구절을 값으로 추가")));
+      a.spec_items.forEach((it, k) => card.append(el("div", { class: "row" },
+        el("select", { onchange: (e) => { it.spec_field = e.target.value || null; changed(); } }, el("option", { value: "" }, "대응 불가"), S.spec_fields.map((f) => el("option", { value: f, selected: it.spec_field === f }, f))),
+        el("input", { type: "text", placeholder: "원문 항목명", value: it.raw_label, onchange: (e) => { it.raw_label = e.target.value; changed(); } }),
+        el("span", { class: "quote" }, it.value),
+        row !== null ? el("button", { onclick: () => { const s = takePending(blockId); if (s) { it.label_span = s; it.raw_label = s.quote; changed(); } } }, it.label_span ? "제목 셀 바꾸기" : "제목 셀 지정") : null,
+        it.spec_field ? null : el("input", { type: "text", placeholder: "대응 불가 사유", value: it.reason || "", onchange: (e) => { it.reason = e.target.value; changed(); } }),
+        el("button", { class: "danger", onclick: () => { a.spec_items.splice(k, 1); changed(); } }, "삭제"))));
+    }
+    card.append(el("div", { class: "row" }, el("span", { class: "lbl" }, "참고 블록"),
+      el("input", { type: "text", placeholder: "참고한 다른 블록 번호(쉼표로)", value: (a.context_block_ids || []).map((x) => x.split("_").pop()).join(", "),
+        onchange: (e) => { const prefix = blockId.slice(0, blockId.lastIndexOf("_") + 1); a.context_block_ids = e.target.value.split(",").map((x) => x.trim()).filter(Boolean).map((x) => x.includes("_") ? x : prefix + x); changed(); } })));
+    side.append(card);
+  });
+}
+
+// ---- 조정: 다른 라벨러의 판정 ------------------------------------------------------
+
+function refUnit(name, blockId, row) {
+  const saved = S.documents[D].references[name];
+  if (!saved) return null;
+  for (const response of Object.values(saved.block_responses || {})) {
+    const b = (response.blocks || []).find((x) => x.block_id === blockId);
+    if (!b) continue;
+    if (row === undefined || row === null) return b;
+    return (b.table?.rows || []).find((x) => x.row === row) || null;
+  }
+  return null;
+}
+function summarize(ref) {
+  if (!ref.annotations.length) return el("div", { class: "note" }, ref.role ? `행 역할: ${ref.role}` : "기능 없음");
+  return el("div", {}, ref.annotations.map((a) => el("div", {}, `${a.annotation_id === ref.primary_annotation_id ? "★ " : ""}${a.move}`,
+    a.steps.length ? ` (${a.steps.map((s) => s.step).join(", ")})` : "", " ", el("span", { class: "quote" }, a.evidence_span.quote),
+    a.undetermined_reason ? ` ${a.undetermined_reason}` : "")));
+}
+function copyUnit(ref) {
+  const anns = JSON.parse(JSON.stringify(ref.annotations));
+  return { role: ref.role, annotations: anns, primary: indexOf(anns, ref.primary_annotation_id) };
+}
+function renderReferences(side, get, show, copy) {
+  if (!S.references.length) return;
+  const box = el("div", { class: "refs" }, el("h3", {}, "라벨러별 판정"));
+  for (const name of S.references) {
+    const ref = get(name);
+    box.append(el("div", { class: "ref" }, el("b", {}, name), " ",
+      ref ? el("button", { onclick: () => { copy(ref); changed(); renderDoc(); } }, "이 판정으로 채우기") : el("span", { class: "note" }, "판정 없음"),
+      ref ? show(ref) : null));
+  }
+  side.append(box);
+}
+
+// ---- 탭 ---------------------------------------------------------------------------
+
+function renderTabs() {
+  $("#tabs").replaceChildren(...S.documents.map((d, i) => {
+    const targets = d.requests.flatMap((r) => r.target_ids);
+    const bad = targets.filter((id) => d.check.blocks[id]).length + (d.check.document.length ? 1 : 0);
+    return el("button", { class: `tab ${i === D ? "on" : ""} ${d.check.valid ? "done" : ""}`, onclick: () => { D = i; focus = null; pending = null; renderAll(); } },
+      `${i + 1}. ${(d.meta.title || d.meta.document_id).slice(0, 18)}`, el("small", {}, d.check.valid ? "완료" : `남음 ${bad}`));
+  }));
+}
+
+function renderAll() { renderTabs(); renderDoc(); renderSide(); }
+
+(async function start() {
+  const res = await fetch("/api/state");
+  S = await res.json();
+  if (!res.ok) throw new Error(S.error || `HTTP ${res.status}`);
+  for (const d of S.documents) L[d.meta.document_id] = fromSaved(d);
+  $("#who").textContent = `라벨러: ${S.annotator}` + (S.references.length ? ` · 조정 대상: ${S.references.join(", ")}` : "");
+  $("#difflabel").hidden = !S.references.length;
+  $("#onlydiff").addEventListener("change", renderDoc);
+  $("#status").textContent = "불러옴";
+  renderAll();
+})().catch((error) => { $("#status").textContent = `불러오기 실패: ${error.message}`; });
+</script>
+</body>
+</html>
