@@ -68,6 +68,11 @@ PAGE_NUM_RE = re.compile(r"^[\s\-–—]*\d{1,4}\s*(?:/\s*\d{1,4})?[\s\-–—]*
 PAGE_NUM_DASHED_RE = re.compile(r"^[-–—]\s*\d{1,4}\s*[-–—]$")
 DIGITS_RE = re.compile(r"\d+")
 SECTION_NO_RE = re.compile(r"^(\d{1,2})\.?$")
+# 같은 행의 제목과 결합할 장 번호. 장식 제목 복구는 2층위로 고정하므로 SECTION_NO_RE 를 따로 둔다.
+CHAPTER_NO_RE = re.compile(r"^(\d{1,2}|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ])\.?$")
+ROW_FRAGMENT_MAX_GAP = 1.0
+ROW_LINE_HEIGHT_RATIO = 2.0
+WORD_CHAR_RE = re.compile(r"[가-힣A-Za-z]")
 MULTI_SPACE_RE = re.compile(r"\s{2,}")
 LEADER_DOTS_RE = re.compile(r"[·․‧∙⋅.…]{4,}")
 APPROVAL_FIELD_RE = re.compile(
@@ -208,6 +213,7 @@ class DocumentPages:
     figures: list[list[Block]]
     heights: list[float]
     layouts: list[list[dict]] = field(default_factory=list)
+    rules: list[list[tuple]] = field(default_factory=list)
 
 
 def union(a: tuple, b: tuple) -> tuple:
@@ -610,7 +616,7 @@ def _build_table_grid(
                 fragment = select_words(remaining[i], indices)
                 fragments.append(fragment)
                 transformations.update(fragment.transformations)
-            fragments.sort(key=lambda entry: (round(entry.bbox[1], 1), entry.bbox[0]))
+            fragments = [entry for row in rows_of(fragments) for entry in row]
             decisions = []
             text, source = cell_text(fragments, stats, decisions)
             if decisions:
@@ -1305,41 +1311,111 @@ def shift_words(words: list[Word], offset: int) -> list[Word]:
     ]
 
 
-def group_rows(lines: list[Line], stats: Stats) -> list[Line]:
-    """같은 높이에 나란히 놓인 조각을 x 순서로 되돌리고, 제목 조각은 합친다."""
-    rows: list[list[Line]] = []
-    for line in lines:
+def rows_of(items: list) -> list[list]:
+    """같은 높이에 나란히 놓인 항목을 행으로 묶는다. 행은 위에서 아래로, 행 안은 x 순서다.
+
+    y0 를 반올림한 값으로 정렬하면 0.1pt 만 높은 오른쪽 조각이 왼쪽 조각보다 앞선다.
+    """
+    rows: list[list] = []
+    for item in sorted(items, key=lambda entry: (entry.bbox[1], entry.bbox[0])):
         for row in rows:
-            if y_overlap(row[0].bbox, line.bbox) > ROW_OVERLAP_RATIO:
-                row.append(line)
+            if y_overlap(row[0].bbox, item.bbox) > ROW_OVERLAP_RATIO:
+                row.append(item)
                 break
         else:
-            rows.append([line])
-
-    out: list[Line] = []
+            rows.append([item])
     for row in rows:
         row.sort(key=lambda entry: entry.bbox[0])
+    rows.sort(key=lambda row: (min(entry.bbox[1] for entry in row), row[0].bbox[0]))
+    return rows
 
-        section_no = SECTION_NO_RE.match(row[0].text) if len(row) >= 2 else None
+
+def text_right(line: Line) -> float:
+    """뒤따르는 공백을 뺀 실제 글자 끝 x."""
+    return line.words[-1].bbox[2] if line.words else line.bbox[2]
+
+
+def vertical_rules(drawings: list[dict]) -> list[tuple[float, float, float]]:
+    """칸을 가르는 세로선(x, y0, y1). 윤곽선으로 그린 글자 획은 채움 도형이라 넣지 않는다."""
+    rules = []
+    for drawing in drawings:
+        stroked = "s" in (drawing.get("type") or "")
+        for item in drawing["items"]:
+            if item[0] == "l" and stroked and abs(item[1].x - item[2].x) < 0.6:
+                rules.append(
+                    (item[1].x, min(item[1].y, item[2].y), max(item[1].y, item[2].y))
+                )
+            elif item[0] == "re" and item[1].width < 1.6 and item[1].height > item[1].width:
+                rules.append(((item[1].x0 + item[1].x1) / 2, item[1].y0, item[1].y1))
+    return rules
+
+
+def join_row_fragments(
+    row: list[Line], stats: Stats, rules: list[tuple] | None = None
+) -> list[Line]:
+    """양쪽 정렬로 어절마다 끊겨 나온 한 줄을 다시 잇는다.
+
+    표 칸 잔해나 도식 라벨을 잇지 않도록, 글자 크기·아래 경계가 같고 간격이 1em 이하이며
+    두 조각 모두 글자를 포함할 때만 잇는다. 사이를 세로선이 가로지르면 다른 칸이라 잇지 않는다.
+    """
+    rules = rules or []
+    out = [row[0]]
+    for line in row[1:]:
+        prev = out[-1]
+        size = max(prev.size, line.size)
+        left, right = text_right(prev), text_left(line)
+        gap = right - left
+        top, bottom = max(prev.bbox[1], line.bbox[1]), min(prev.bbox[3], line.bbox[3])
+        divided = any(
+            left - 0.5 <= x <= right + 0.5 and y0 <= top + 1 and y1 >= bottom - 1
+            for x, y0, y1 in rules
+        )
+        if (
+            0 <= gap <= size * ROW_FRAGMENT_MAX_GAP
+            and not divided
+            and abs(prev.size - line.size) <= size * 0.15
+            and abs(prev.bbox[3] - line.bbox[3]) <= 1.0
+            and WORD_CHAR_RE.search(prev.text)
+            and WORD_CHAR_RE.search(line.text)
+        ):
+            joiner = " " if gap > line.size * SPACE_GAP_RATIO else ""
+            out[-1] = join_lines([prev, line], joiner, "row_fragments_joined", stats)
+        else:
+            out.append(line)
+    return out
+
+
+def group_rows(
+    lines: list[Line], stats: Stats, rules: list[tuple] | None = None
+) -> list[Line]:
+    """같은 높이에 나란히 놓인 조각을 x 순서로 되돌리고, 제목 조각은 합친다."""
+    out: list[Line] = []
+    for row in rows_of(lines):
         nearby = all(
             b.bbox[0] - a.bbox[2] <= max(a.size, b.size) * 1.5
             for a, b in zip(row, row[1:])
         )
         if len(row) > 1 and nearby and all(len(entry.text) == 1 for entry in row):
             out.append(join_lines(row, "", "visual_row_joined", stats))
-        elif (
-            section_no
+            continue
+        chapter_no = CHAPTER_NO_RE.match(row[0].text) if len(row) >= 2 else None
+        if (
+            chapter_no
             and len(row[1].text) > 1
+            and WORD_CHAR_RE.search(row[1].text)
             and row[1].bbox[0] - row[0].bbox[2] <= max(row[0].size, row[1].size) * 4
         ):
-            number = replace(row[0], text=f"{section_no.group(1)}.")
-            out.append(
-                join_lines([number, row[1]], " ", "section_number_joined", stats)
+            # 아라비아 숫자는 번호 패턴('1. ')에 맞게 온점을 붙인다. 로마 숫자는 원문 그대로 둔다.
+            number = (
+                replace(row[0], text=f"{chapter_no.group(1)}.")
+                if chapter_no.group(1).isdigit()
+                else row[0]
             )
-            out.extend(row[2:])
-        else:
-            out.extend(row)
-    out.sort(key=lambda entry: (round(entry.bbox[1], 1), entry.bbox[0]))
+            row = [
+                join_lines([number, row[1]], " ", "section_number_joined", stats),
+                *row[2:],
+            ]
+        out.extend(join_row_fragments(row, stats, rules))
     return out
 
 
@@ -2012,6 +2088,7 @@ def _extract_document_pages(doc, stats: Stats, warnings: list[dict]) -> Document
     page_lines: list[list[Line]] = []
     page_tables: list[list[Block]] = []
     page_figures: list[list[Block]] = []
+    page_rules: list[list[tuple]] = []
     heights: list[float] = []
     layouts: list[list[dict]] = []
 
@@ -2085,13 +2162,15 @@ def _extract_document_pages(doc, stats: Stats, warnings: list[dict]) -> Document
             page_lines.append(body)
             page_tables.append(tables)
             page_figures.append(figures)
+            page_rules.append(vertical_rules(page.get_drawings()))
             if not body and not tables:
                 warnings.append({"page": page.number + 1, **diagnose_empty_page(page)})
     finally:
         doc.close()
 
     return DocumentPages(
-        pages_meta, raw_pages, page_lines, page_tables, page_figures, heights, layouts
+        pages_meta, raw_pages, page_lines, page_tables, page_figures, heights, layouts,
+        page_rules,
     )
 
 
@@ -2109,7 +2188,12 @@ def _assemble_blocks(pages: DocumentPages, stats: Stats) -> list[Block]:
         ]
         barriers.extend(lines[i].bbox for (p, i) in tagged if p == page_index)
         flow = merge_wrapped(
-            join_vertical_runs(group_rows(body, stats), stats), stats, barriers
+            join_vertical_runs(
+                group_rows(body, stats, pages.rules[page_index] if pages.rules else []),
+                stats,
+            ),
+            stats,
+            barriers,
         )
         page_blocks = [classify(line, body_left, page_no) for line in flow]
         page_blocks += [
@@ -2119,10 +2203,37 @@ def _assemble_blocks(pages: DocumentPages, stats: Stats) -> list[Block]:
         ]
         page_blocks += pages.tables[page_index]
         page_blocks += pages.figures[page_index]
-        page_blocks.sort(key=lambda b: (round(b.bbox[1], 1), b.bbox[0], b.kind))
-        blocks.extend(page_blocks)
+        blocks.extend(reading_order(page_blocks))
 
     return blocks
+
+
+def reading_order(blocks: list[Block]) -> list[Block]:
+    """블록을 위에서 아래로 놓고, 같은 행에 나란한 한 줄 높이 블록은 x 순서로 둔다.
+
+    여러 줄 문단·그림처럼 키가 큰 블록은 행으로 묶지 않는다. 묶으면 옆에 놓인 여러 행이
+    한 행으로 합쳐져 순서가 크게 바뀐다.
+    """
+    def line_high(block: Block) -> bool:
+        return bool(block.size) and (
+            block.bbox[3] - block.bbox[1] <= block.size * ROW_LINE_HEIGHT_RATIO
+        )
+
+    ordered = sorted(blocks, key=lambda b: (round(b.bbox[1], 1), b.bbox[0], b.kind))
+    out: list[Block] = []
+    i = 0
+    while i < len(ordered):
+        row = [ordered[i]]
+        if line_high(ordered[i]):
+            while (
+                i + len(row) < len(ordered)
+                and line_high(ordered[i + len(row)])
+                and y_overlap(row[0].bbox, ordered[i + len(row)].bbox) > ROW_OVERLAP_RATIO
+            ):
+                row.append(ordered[i + len(row)])
+        out.extend(sorted(row, key=lambda b: (b.bbox[0], b.kind)))
+        i += len(row)
+    return out
 
 
 def recover_approval_blocks(
@@ -2190,9 +2301,10 @@ def recover_approval_blocks(
             member_ids = {id(b) for b in members}
             blocks = [b for b in blocks if id(b) not in member_ids] + [replacement]
             region["status"] = "geometry_recovered"
-    return sorted(
-        blocks, key=lambda b: (b.page, round(b.bbox[1], 1), b.bbox[0], b.kind)
-    )
+    by_page: dict[int, list[Block]] = {}
+    for block in blocks:
+        by_page.setdefault(block.page, []).append(block)
+    return [block for page in sorted(by_page) for block in reading_order(by_page[page])]
 
 
 def implementation_hashes() -> dict[str, str]:
