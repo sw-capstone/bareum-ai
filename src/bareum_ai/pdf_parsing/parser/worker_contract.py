@@ -5,7 +5,11 @@ from pydantic import Field, TypeAdapter
 
 from bareum_ai.pdf_parsing.api.responses import ParsedPdf
 from bareum_ai.pdf_parsing.errors import ErrorCode
-from bareum_ai.pdf_parsing.types import ContractModel, ExtractionQuality
+from bareum_ai.pdf_parsing.types import (
+    ContractModel,
+    ExtractionQuality,
+    FailureDiagnostic,
+)
 
 
 class ParserInput(ContractModel):
@@ -24,6 +28,7 @@ class WorkerSucceeded(ContractModel):
 class WorkerFailed(ContractModel):
     status: Literal["FAILED"] = "FAILED"
     code: ErrorCode
+    diagnostic: FailureDiagnostic | None = None
 
 
 type WorkerResult = Annotated[

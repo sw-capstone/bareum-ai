@@ -3,7 +3,7 @@ from typing import Annotated, ClassVar
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from bareum_ai.pdf_parsing.errors import ErrorCode, PdfParseApiError
-from bareum_ai.pdf_parsing.types import JsonObject
+from bareum_ai.pdf_parsing.types import FailureDiagnostic, JsonObject
 
 
 class _Cell(BaseModel):
@@ -31,12 +31,22 @@ def validate_table(block: JsonObject) -> None:
     try:
         table = _Table.model_validate(block)
     except ValidationError:
-        raise PdfParseApiError(ErrorCode.PARSER_FAILED) from None
+        raise PdfParseApiError(
+            ErrorCode.PARSER_FAILED,
+            diagnostic=FailureDiagnostic(
+                stage="table_validation", reason="invalid_table_schema"
+            ),
+        ) from None
 
     row_count = len(table.rows)
     column_count = max(len(row) for row in table.rows)
     if column_count == 0:
-        raise PdfParseApiError(ErrorCode.PARSER_FAILED)
+        raise PdfParseApiError(
+            ErrorCode.PARSER_FAILED,
+            diagnostic=FailureDiagnostic(
+                stage="table_validation", reason="empty_columns"
+            ),
+        )
 
     covered: set[tuple[int, int]] = set()
     for cell in table.cells:
@@ -47,10 +57,20 @@ def validate_table(block: JsonObject) -> None:
             or column_end > column_count
             or cell.col >= len(table.rows[cell.row])
         ):
-            raise PdfParseApiError(ErrorCode.PARSER_FAILED)
+            raise PdfParseApiError(
+                ErrorCode.PARSER_FAILED,
+                diagnostic=FailureDiagnostic(
+                    stage="table_validation", reason="cell_out_of_bounds"
+                ),
+            )
         for row in range(cell.row, row_end):
             for column in range(cell.col, column_end):
                 position = (row, column)
                 if position in covered:
-                    raise PdfParseApiError(ErrorCode.PARSER_FAILED)
+                    raise PdfParseApiError(
+                        ErrorCode.PARSER_FAILED,
+                        diagnostic=FailureDiagnostic(
+                            stage="table_validation", reason="overlapping_cells"
+                        ),
+                    )
                 covered.add(position)

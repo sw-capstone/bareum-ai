@@ -8,7 +8,7 @@ from bareum_ai.pdf_parsing.api.responses import ParsedPdf
 from bareum_ai.pdf_parsing.errors import ErrorCode, PdfParseApiError
 from bareum_ai.pdf_parsing.parser.table_validation import validate_table
 from bareum_ai.pdf_parsing.parser.worker_contract import ParserInput
-from bareum_ai.pdf_parsing.types import ExtractionQuality
+from bareum_ai.pdf_parsing.types import ExtractionQuality, FailureDiagnostic
 
 
 class _Projection(BaseModel):
@@ -159,7 +159,12 @@ def validate_extraction(parsed: ParsedPdf, job: ParserInput) -> ExtractionQualit
             )
         )
     ):
-        raise PdfParseApiError(ErrorCode.PARSER_FAILED)
+        raise PdfParseApiError(
+            ErrorCode.PARSER_FAILED,
+            diagnostic=FailureDiagnostic(
+                stage="extraction_validation", reason="invalid_result_references"
+            ),
+        )
     if not any(
         block.text.strip()
         and not block.excluded_from_retrieval

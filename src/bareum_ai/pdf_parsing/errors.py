@@ -13,6 +13,7 @@ from bareum_ai.pdf_parsing.types import (
     AttemptIdentifier,
     AttemptIdentity,
     ContractModel,
+    FailureDiagnostic,
     ReportIdentifier,
 )
 
@@ -184,8 +185,13 @@ class PdfParseApiError(Exception):
     """HTTP 경계에서 처리할 코드와 요청 식별자를 운반한다."""
 
     def __init__(
-        self, code: ErrorCode, identity: AttemptIdentity | None = None
+        self,
+        code: ErrorCode,
+        identity: AttemptIdentity | None = None,
+        *,
+        diagnostic: FailureDiagnostic | None = None,
     ) -> None:
         self.code = code
         self.identity = identity
+        self.diagnostic = diagnostic
         super().__init__(ERROR_DEFINITIONS[code].message)

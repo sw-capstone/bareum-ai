@@ -17,33 +17,51 @@ from bareum_ai.pdf_parsing.parser.worker_contract import (
     WorkerResult,
     WorkerSucceeded,
 )
+from bareum_ai.pdf_parsing.types import FailureDiagnostic, FailureStage
 
 
 def execute(job: ParserInput) -> WorkerResult:
     pymupdf.TOOLS.mupdf_display_errors(on=False)
     pymupdf.TOOLS.mupdf_display_warnings(on=False)
-    with (
-        Path(os.devnull).open("w") as quiet,
-        redirect_stdout(quiet),
-        redirect_stderr(quiet),
-    ):
-        validate_pdf(job.source_path, job.page_limit)
-        payload = parse_pdf(job.source_path)[0]
-        parsed = ParsedPdf.model_validate_json(json.dumps(payload, allow_nan=False))
-    parsed = parsed.model_copy(
-        update={"document": parsed.document | {"filename": job.original_filename}}
-    )
-    return WorkerSucceeded(parsed=parsed, quality=validate_extraction(parsed, job))
+    stage: FailureStage = "pdf_validation"
+    try:
+        with (
+            Path(os.devnull).open("w") as quiet,
+            redirect_stdout(quiet),
+            redirect_stderr(quiet),
+        ):
+            validate_pdf(job.source_path, job.page_limit)
+            stage = "parser"
+            payload = parse_pdf(job.source_path)[0]
+            stage = "result_validation"
+            parsed = ParsedPdf.model_validate_json(json.dumps(payload, allow_nan=False))
+        parsed = parsed.model_copy(
+            update={"document": parsed.document | {"filename": job.original_filename}}
+        )
+        stage = "extraction_validation"
+        return WorkerSucceeded(parsed=parsed, quality=validate_extraction(parsed, job))
+    except PdfParseApiError as exc:
+        return WorkerFailed(
+            code=exc.code,
+            diagnostic=exc.diagnostic
+            or FailureDiagnostic(stage=stage, reason="validation_failed"),
+        )
+    except (OSError, ValidationError, RuntimeError, ValueError) as exc:
+        return WorkerFailed(
+            code=ErrorCode.PARSER_FAILED,
+            diagnostic=FailureDiagnostic.from_exception(stage, exc),
+        )
 
 
 def main() -> int:
     manifest = Path(sys.argv[1])
     try:
         result = execute(ParserInput.model_validate_json(manifest.read_bytes()))
-    except PdfParseApiError as exc:
-        result = WorkerFailed(code=exc.code)
-    except OSError, ValidationError, RuntimeError, ValueError:
-        result = WorkerFailed(code=ErrorCode.PARSER_FAILED)
+    except (OSError, ValidationError, RuntimeError, ValueError) as exc:
+        result = WorkerFailed(
+            code=ErrorCode.PARSER_FAILED,
+            diagnostic=FailureDiagnostic.from_exception("worker_input", exc),
+        )
     manifest.with_name("result.json").write_text(
         result.model_dump_json(), encoding="utf-8"
     )

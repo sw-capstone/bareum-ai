@@ -31,15 +31,52 @@ def parse_overlapping_table(path: Path) -> tuple[JsonObject, str, str]:
     return parsed, markdown, raw
 
 
+def parse_exception(_path: Path) -> tuple[JsonObject, str, str]:
+    sensitive = (
+        "private-parser-content example-internal-token "
+        "https://example-bucket.s3.ap-northeast-2.amazonaws.com/"
+        "reports/101/original.pdf?signature=example"
+    )
+    sys.stdout.write(sensitive)
+    sys.stderr.write(sensitive)
+    raise RuntimeError(sensitive)
+
+
+def parse_invalid_schema(path: Path) -> tuple[JsonObject, str, str]:
+    payload, markdown, raw = parse_pdf(path)
+    parsed = TypeAdapter(JsonObject).validate_json(json.dumps(payload))
+    del parsed["pages"]
+    return parsed, markdown, raw
+
+
+def parse_invalid_references(path: Path) -> tuple[JsonObject, str, str]:
+    payload, markdown, raw = parse_pdf(path)
+    parsed = TypeAdapter(JsonObject).validate_json(json.dumps(payload))
+    parsed["document"] = {"page_count": 1, "sha256": "0" * 64}
+    return parsed, markdown, raw
+
+
 def main() -> int:
     manifest = Path(sys.argv[1])
     job = json.loads(manifest.read_bytes())
-    if job["originalFilename"] == "overlapping-table":
+    mode = job["originalFilename"].removesuffix("-private-filename.pdf")
+    if mode == "overlapping-table":
         parser_worker.parse_pdf = parse_overlapping_table
         return parser_worker.main()
-    if job["originalFilename"] == "crash":
+    if mode == "parser-exception":
+        parser_worker.parse_pdf = parse_exception
+        return parser_worker.main()
+    if mode == "invalid-schema":
+        parser_worker.parse_pdf = parse_invalid_schema
+        return parser_worker.main()
+    if mode == "invalid-references":
+        parser_worker.parse_pdf = parse_invalid_references
+        return parser_worker.main()
+    if mode == "crash":
         return 7
-    if job["originalFilename"] == "invalid":
+    if mode == "missing-result":
+        return 0
+    if mode == "invalid":
         manifest.with_name("result.json").write_text('{"status":"SUCCEEDED"}')
         return 0
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
