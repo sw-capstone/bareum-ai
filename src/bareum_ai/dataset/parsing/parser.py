@@ -475,26 +475,61 @@ def select_words(line: Line, indices: list[int]) -> Line:
     )
 
 
-def table_cell_geometry(table) -> list[dict]:
-    """빈 슬롯은 rows에 남기고, 실제 셀의 좌표와 병합 범위를 기록한다."""
+def table_cell_geometry(table, large_first: bool = False) -> list[dict]:
+    """셀을 행·열 슬롯에 놓고 병합 범위를 기록한다. 빈 슬롯은 rows에 빈 칸으로 남는다.
+
+    병합 범위는 셀이 덮는 행·열의 시작 좌표로 센다. find_tables 는 큰 셀 안에 작은 셀을
+    겹쳐 줄 때가 있다(#29). 그러면 작은 셀이 슬롯을 먼저 갖고, 큰 셀은 남은 슬롯을
+    세로로 먼저 늘린 직사각형들로 나눈다. large_first 면 반대로 큰 셀이 먼저 갖는다.
+    """
+    n_rows, n_cols = len(table.rows), table_columns(table)
     entries = [
         (r, c, tuple(cell))
         for r, row in enumerate(table.rows)
         for c, cell in enumerate(row.cells)
         if cell is not None
     ]
-    xs = sorted({round(v, 3) for _, _, box in entries for v in (box[0], box[2])})
-    ys = sorted({round(v, 3) for _, _, box in entries for v in (box[1], box[3])})
-    return [
-        {
-            "row": r,
-            "col": c,
-            "bbox": list(box),
-            "rowspan": max(1, ys.index(round(box[3], 3)) - ys.index(round(box[1], 3))),
-            "colspan": max(1, xs.index(round(box[2], 3)) - xs.index(round(box[0], 3))),
-        }
-        for r, c, box in entries
-    ]
+    tops: dict[int, float] = {}
+    lefts: dict[int, float] = {}
+    for r, c, box in entries:
+        tops[r] = min(tops.get(r, box[1]), box[1])
+        lefts[c] = min(lefts.get(c, box[0]), box[0])
+
+    def last(start: int, end: float, starts: dict[int, float], count: int) -> int:
+        return min(count - 1, max(
+            (i for i, v in starts.items() if i >= start and v < end - 1), default=start
+        ))
+
+    spans = [(r, c, last(r, box[3], tops, n_rows), last(c, box[2], lefts, n_cols), box)
+             for r, c, box in entries]
+    claimed: set[tuple[int, int]] = set()
+    cells = []
+    spans.sort(key=lambda s: (s[2] - s[0] + 1) * (s[3] - s[1] + 1), reverse=large_first)
+    for r, c, r1, c1, box in spans:
+        free = {(i, j) for i in range(r, r1 + 1) for j in range(c, c1 + 1)} - claimed
+        while free:
+            i0, j0 = min(free)
+            i1, j1 = i0, j0
+            while (i1 + 1, j0) in free:
+                i1 += 1
+            while all((i, j1 + 1) in free for i in range(i0, i1 + 1)):
+                j1 += 1
+            part = {(i, j) for i in range(i0, i1 + 1) for j in range(j0, j1 + 1)}
+            free -= part
+            claimed |= part
+            cells.append({
+                "row": i0,
+                "col": j0,
+                "bbox": [
+                    lefts.get(j0, box[0]) if j0 > c else box[0],
+                    tops.get(i0, box[1]) if i0 > r else box[1],
+                    lefts.get(j1 + 1, box[2]) if j1 < c1 else box[2],
+                    tops.get(i1 + 1, box[3]) if i1 < r1 else box[3],
+                ],
+                "rowspan": i1 - i0 + 1,
+                "colspan": j1 - j0 + 1,
+            })
+    return sorted(cells, key=lambda cell: (cell["row"], cell["col"]))
 
 
 def prune_grid(
@@ -633,38 +668,29 @@ def _assign_table_words(
 
 def _build_table_grid(
     table,
+    geometry: list[dict],
     assignments: dict[tuple[int, int], dict[int, list[int]]],
     remaining: dict[int, Line],
     stats: Stats,
 ) -> tuple[list[list[str]], list[list[str]], set[str], dict]:
+    n_rows, n_cols = len(table.rows), table_columns(table)
+    grid = [[""] * n_cols for _ in range(n_rows)]
+    source_grid = [[""] * n_cols for _ in range(n_rows)]
     line_breaks = {}
-    grid: list[list[str]] = []
-    source_grid: list[list[str]] = []
     transformations = {"table_cells_mapped"}
-    for ri, row in enumerate(table.rows):
-        cells: list[str] = []
-        source_cells: list[str] = []
-        for ci, cell in enumerate(row.cells):
-            if cell is None:
-                cells.append("")
-                source_cells.append("")
-                continue
-            fragments: list[Line] = []
-            for i, indices in assignments.get((ri, ci), {}).items():
-                fragment = select_words(remaining[i], indices)
-                fragments.append(fragment)
-                transformations.update(fragment.transformations)
-            fragments = [entry for row in rows_of(fragments) for entry in row]
-            decisions = []
-            text, source = cell_text(fragments, stats, decisions)
-            if decisions:
-                line_breaks[(ri, ci)] = decisions
-                transformations.add("cell_linebreaks_recorded")
-            cells.append(text)
-            source_cells.append(source)
-        grid.append(cells)
-        source_grid.append(source_cells)
-
+    for cell in geometry:
+        ri, ci = cell["row"], cell["col"]
+        fragments: list[Line] = []
+        for i, indices in assignments.get((ri, ci), {}).items():
+            fragment = select_words(remaining[i], indices)
+            fragments.append(fragment)
+            transformations.update(fragment.transformations)
+        fragments = [entry for row in rows_of(fragments) for entry in row]
+        decisions = []
+        grid[ri][ci], source_grid[ri][ci] = cell_text(fragments, stats, decisions)
+        if decisions:
+            line_breaks[(ri, ci)] = decisions
+            transformations.add("cell_linebreaks_recorded")
     return grid, source_grid, transformations, line_breaks
 
 
@@ -988,25 +1014,11 @@ def find_tables_on_rules(page, segments: list, words: list, clip) -> list:
         return scratch.find_tables(clip=clip).tables
 
 
-def table_geometry_valid(table) -> bool:
-    """셀이 겹치지 않고 병합 범위가 표 안에 있는가(파싱 API의 표 검증과 같은 기준)."""
-    row_count = len(table.rows)
-    column_count = max((len(row.cells) for row in table.rows), default=0)
-    covered: set[tuple[int, int]] = set()
-    for cell in table_cell_geometry(table):
-        for r in range(cell["row"], cell["row"] + cell["rowspan"]):
-            for c in range(cell["col"], cell["col"] + cell["colspan"]):
-                if r >= row_count or c >= column_count or (r, c) in covered:
-                    return False
-                covered.add((r, c))
-    return True
-
-
 def recover_unbordered_tables(page, drawings: list[dict], tables: list, warnings: list[dict]):
     """바깥선 없는 표에 좌우 세로선을 더해 그 자리에서 다시 찾는다.
 
-    다시 찾은 표가 하나이고, 2행 2열 이상이며, 셀 구조가 유효하고, 영역 안 글자가 모두
-    칸에 들어갈 때만 표로 받는다. 아니면 경고만 남기고 글자는 본문 줄로 둔다.
+    다시 찾은 표가 하나이고, 2행 2열 이상이며, 영역 안 글자가 모두 칸에 들어갈 때만
+    표로 받는다. 아니면 경고만 남기고 글자는 본문 줄로 둔다.
     """
     recovered = set()
     failed: list = []
@@ -1040,7 +1052,6 @@ def recover_unbordered_tables(page, drawings: list[dict], tables: list, warnings
                 and len(table.rows) >= 2
                 and table_columns(table) >= 2
                 and max(abs(a - b) for a, b in zip(table.bbox, (x0, top, x1, bottom))) < 6
-                and table_geometry_valid(table)
                 # 괘선으로 확인한 열보다 적으면 칸이 합쳐진 것이다('① ② ③'이 한 칸에 든다).
                 and table_columns(table) >= len(columns) + 1
                 and all(
@@ -1146,13 +1157,18 @@ def extract_tables(
         if not inside:
             continue
 
-        geometry = table_cell_geometry(table)
-        assignments, placed_words = _assign_table_words(geometry, remaining, inside)
-        partial = [
-            i
-            for i, placed in placed_words.items()
-            if placed and len(placed) < len(remaining[i].words)
-        ]
+        # 겹친 셀을 나누는 두 방식 중 원문 줄을 덜 가르는 쪽을 쓴다(같으면 작은 셀 우선).
+        choices = []
+        for large_first in (False, True):
+            geometry = table_cell_geometry(table, large_first)
+            assignments, placed_words = _assign_table_words(geometry, remaining, inside)
+            partial = [
+                i
+                for i, placed in placed_words.items()
+                if placed and len(placed) < len(remaining[i].words)
+            ]
+            choices.append((len(partial), large_first, geometry, assignments, placed_words, partial))
+        _, _, geometry, assignments, placed_words, partial = min(choices, key=lambda c: c[:2])
         cuts_approval = partial and approval_candidate_contains(table.bbox, approval_regions)
         if len(partial) >= 3 or cuts_approval:
             warnings.append(
@@ -1166,7 +1182,7 @@ def extract_tables(
             )
             continue
         grid, source_grid, transformations, line_breaks = _build_table_grid(
-            table, assignments, remaining, stats
+            table, geometry, assignments, remaining, stats
         )
         if tuple(table.bbox) in recovered:
             transformations.add("dashed_table_boundaries_recovered")
