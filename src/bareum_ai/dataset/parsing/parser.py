@@ -1544,11 +1544,22 @@ def merge_wrapped(
     }
     right_edge = max(line.bbox[2] for line in lines)
     paragraphs: list[Line] = []
+    # 문단마다 첫 줄의 글자 시작과 마지막 줄(끝 x, 글자)을 따로 둔다. 문단 bbox 는 줄을 합친
+    # 범위라, 둘째 줄이 짧게 끝나도 첫 줄의 오른쪽 끝을 그대로 들고 있다.
+    heads: list[float] = []
+    tails: list[tuple[float, str]] = []
     for i, line in enumerate(lines):
         if paragraphs:
             prev = paragraphs[-1]
-            shortfall = right_edge - prev.bbox[2]
+            tail_right, tail_text = tails[-1]
+            shortfall = right_edge - tail_right
             vgap = line.bbox[1] - prev.bbox[3]
+            # 줄 박스는 앞쪽 공백까지 포함해 들여쓴 줄의 시작이 실제보다 왼쪽에 잡힌다.
+            # 앞 줄이 문장으로 끝나지 않았을 때만 실제 글자 시작으로 다시 비교한다.
+            aligned = abs(line.bbox[0] - prev.bbox[0]) <= prev.size * 2 or (
+                abs(max(text_left(line), line.bbox[0]) - heads[-1]) <= prev.size * 2
+                and not ends_sentence(tail_text)
+            )
             smaller_continuation = continues_smaller_list_text(prev, line)
             blocked = any(
                 box[1] < line.bbox[1]
@@ -1560,7 +1571,7 @@ def merge_wrapped(
             if (
                 shortfall < prev.size * WRAP_MAX_SHORTFALL
                 and 0 <= vgap < prev.size * WRAP_MAX_VGAP
-                and abs(line.bbox[0] - prev.bbox[0]) <= prev.size * 2
+                and aligned
                 and (
                     abs(line.size - prev.size) <= prev.size * 0.15
                     or smaller_continuation
@@ -1584,13 +1595,22 @@ def merge_wrapped(
                     | {"wrapped_lines_merged"}
                 )
                 stats.merged_lines += 1
+                tails[-1] = (line.bbox[2], line.text)
                 continue
         paragraphs.append(
             replace(
                 line, words=list(line.words), transformations=list(line.transformations)
             )
         )
+        heads.append(text_left(line))
+        tails.append((line.bbox[2], line.text))
     return paragraphs
+
+
+def ends_sentence(text: str) -> bool:
+    """줄이 문장 끝(온점, '-다', '-함' 같은 개조식 종결)으로 끝나는가."""
+    text = text.rstrip()
+    return text.endswith((".", "다")) or bool(SENTENCE_ENDING.search(text))
 
 
 def collapse_spaced(text: str) -> tuple[str, bool]:
