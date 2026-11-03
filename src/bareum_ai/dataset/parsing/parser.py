@@ -912,8 +912,6 @@ def horizontal_rules(drawings: list[dict]) -> list[tuple[float, float, float]]:
             if item[0] == "l" and stroked and abs(item[1].y - item[2].y) < 0.6:
                 a, b = sorted((item[1].x, item[2].x))
                 pieces.append((a, b, (item[1].y + item[2].y) / 2))
-            elif item[0] == "re" and item[1].height < 1.6 and item[1].width > item[1].height:
-                pieces.append((item[1].x0, item[1].x1, (item[1].y0 + item[1].y1) / 2))
     rules: list[list[float]] = []
     for x0, x1, y in sorted(pieces, key=lambda p: (round(p[2]), p[0])):
         last = rules[-1] if rules else None
@@ -1021,7 +1019,6 @@ def recover_unbordered_tables(page, drawings: list[dict], tables: list, warnings
     표로 받는다. 아니면 경고만 남기고 글자는 본문 줄로 둔다.
     """
     recovered = set()
-    failed: list = []
     regions = unbordered_table_regions(drawings, tables)
     if not regions:
         return tables, recovered
@@ -1068,18 +1065,13 @@ def recover_unbordered_tables(page, drawings: list[dict], tables: list, warnings
             outer = pymupdf.Rect(table.bbox) + (-2, -2, 2, 2)
             tables = [t for t in tables if not outer.contains(pymupdf.Rect(t.bbox))] + [table]
             recovered.add(tuple(table.bbox))
-        elif inside:
-            failed.append(region)
-    for region in failed:
-        # 더 작은 영역에서 표를 복원했으면 그 자리의 경고는 남기지 않는다.
-        if any((region & pymupdf.Rect(box)).get_area() > region.get_area() * 0.5 for box in recovered):
-            continue
-        warnings.append({
-            "code": "table_unbordered_candidate",
-            "page": page.number + 1,
-            "bbox": [region.x0, region.y0, region.x1, region.y1],
-            "detail": "좌우 바깥선 없는 표로 보이지만 셀 구조를 확정하지 못해 본문 줄로 두었습니다. 표 구조 검수가 필요합니다.",
-        })
+        else:
+            warnings.append({
+                "code": "table_unbordered_candidate",
+                "page": page.number + 1,
+                "bbox": [x0, top, x1, bottom],
+                "detail": "좌우 바깥선 없는 표로 보이지만 셀 구조를 확정하지 못해 본문 줄로 두었습니다. 표 구조 검수가 필요합니다.",
+            })
     return tables, recovered
 
 
@@ -1133,20 +1125,6 @@ def extract_tables(
     background_fixed = set()
     if approval_regions is None:
         approval_regions = detect_approval_regions(page, lines, warnings)
-    # 결재란은 결재란 경로가 다룬다. 결재란과 겹친 바깥선 없는 표 후보 경고는 남기지 않는다.
-    approval_boxes = [pymupdf.Rect(r["bbox"]) for r in approval_regions if r.get("kind") == "approval_grid"]
-    warnings[:] = [
-        w for w in warnings
-        if not (
-            w["code"] == "table_unbordered_candidate"
-            and w["page"] == page.number + 1
-            and any(
-                (pymupdf.Rect(w["bbox"]) & box).get_area()
-                > pymupdf.Rect(w["bbox"]).get_area() * 0.5
-                for box in approval_boxes
-            )
-        )
-    ]
 
     for table in found:
         inside = [
@@ -1643,8 +1621,6 @@ def vertical_rules(drawings: list[dict]) -> list[tuple[float, float, float]]:
                 rules.append(
                     (item[1].x, min(item[1].y, item[2].y), max(item[1].y, item[2].y))
                 )
-            elif item[0] == "re" and item[1].width < 1.6 and item[1].height > item[1].width:
-                rules.append(((item[1].x0 + item[1].x1) / 2, item[1].y0, item[1].y1))
     return rules
 
 
