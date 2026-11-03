@@ -972,6 +972,22 @@ def column_lines(
     return columns
 
 
+def find_tables_on_rules(page, segments: list, words: list, clip) -> list:
+    """괘선과 글자 자리만 옮긴 빈 페이지에서 표를 찾는다.
+
+    채움 도형이 많은 페이지에서는 같은 괘선을 넘겨도 find_tables 가 표를 놓친다. 칸 글자는
+    나중에 원래 줄에서 배정하므로 여기서는 셀 좌표만 얻으면 된다. 글자가 없는 표는
+    find_tables 가 버리므로 각 어절 자리에 작은 표시 글자를 둔다.
+    """
+    with pymupdf.open() as doc:
+        scratch = doc.new_page(width=page.rect.width, height=page.rect.height)
+        for a, b in segments:
+            scratch.draw_line(a, b, width=0.5)
+        for w in words:
+            scratch.insert_text(((w[0] + w[2]) / 2 - 1, (w[1] + w[3]) / 2 + 1), "x", fontsize=3)
+        return scratch.find_tables(clip=clip).tables
+
+
 def table_geometry_valid(table) -> bool:
     """셀이 겹치지 않고 병합 범위가 표 안에 있는가(파싱 API의 표 검증과 같은 기준)."""
     row_count = len(table.rows)
@@ -1016,23 +1032,30 @@ def recover_unbordered_tables(page, drawings: list[dict], tables: list, warnings
         extra += [((a, y), (b, y)) for a, b, y in hrules if top - 2 <= y <= bottom + 2 and x0 - 4 <= a and b <= x1 + 4]
         extra += [((x, a), (x, b)) for x, a, b in vrules if x0 - 4 <= x <= x1 + 4 and top - 2 <= a and b <= bottom + 2 and b - a > 6]
         clip = pymupdf.Rect(x0 - 4, top - 4, x1 + 4, bottom + 4)
-        found = page.find_tables(clip=clip, add_lines=extra).tables
-        table = found[0] if len(found) == 1 else None
-        accepted = (
-            table is not None
-            and len(table.rows) >= 2
-            and table_columns(table) >= 2
-            and max(abs(a - b) for a, b in zip(table.bbox, (x0, top, x1, bottom))) < 6
-            and table_geometry_valid(table)
-            # 괘선으로 확인한 열보다 적으면 칸이 합쳐진 것이다('① ② ③'이 한 칸에 든다).
-            and table_columns(table) >= len(columns) + 1
-            and all(
-                any(center_in(w[:4], cell["bbox"]) for cell in table_cell_geometry(table))
-                for w in inside
-            )
-        )
-        if accepted:
-            tables = tables + [table]
+
+        def acceptable(found):
+            table = found[0] if len(found) == 1 else None
+            return table if (
+                table is not None
+                and len(table.rows) >= 2
+                and table_columns(table) >= 2
+                and max(abs(a - b) for a, b in zip(table.bbox, (x0, top, x1, bottom))) < 6
+                and table_geometry_valid(table)
+                # 괘선으로 확인한 열보다 적으면 칸이 합쳐진 것이다('① ② ③'이 한 칸에 든다).
+                and table_columns(table) >= len(columns) + 1
+                and all(
+                    any(center_in(w[:4], cell["bbox"]) for cell in table_cell_geometry(table))
+                    for w in inside
+                )
+            ) else None
+
+        table = acceptable(page.find_tables(clip=clip, add_lines=extra).tables)
+        if table is None and page.rotation == 0:
+            table = acceptable(find_tables_on_rules(page, extra, inside, clip))
+        if table is not None:
+            # 바깥선 없는 표의 가운데 칸만 따로 잡힌 조각 표는 복원한 표로 대체한다.
+            outer = pymupdf.Rect(table.bbox) + (-2, -2, 2, 2)
+            tables = [t for t in tables if not outer.contains(pymupdf.Rect(t.bbox))] + [table]
             recovered.add(tuple(table.bbox))
         elif inside:
             failed.append(region)
@@ -1574,9 +1597,13 @@ def text_right(line: Line) -> float:
 def thin_bar(drawing: dict) -> str | None:
     """채움 다각형으로 그린 괘선인가. 전체 모양이 가는 막대면 'v'(세로) 또는 'h'(가로).
 
-    글자 윤곽선도 채움 도형이지만 글자 하나의 상자는 막대 모양이 아니다.
+    글자 윤곽선도 채움 도형이지만 글자 하나의 상자는 막대 모양이 아니다. 그라데이션 배경을
+    가는 띠로 잘라 칠한 것은 막대 모양이지만 색이 연하므로 넣지 않는다.
     """
     if "f" not in (drawing.get("type") or "") or "s" in (drawing.get("type") or ""):
+        return None
+    fill = drawing.get("fill") or (0, 0, 0)
+    if len(fill) == 3 and 0.299 * fill[0] + 0.587 * fill[1] + 0.114 * fill[2] >= 0.7:
         return None
     r = drawing["rect"]
     if r.width < 1.6 and r.height > 6:

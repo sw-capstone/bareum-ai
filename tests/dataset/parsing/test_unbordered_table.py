@@ -67,6 +67,12 @@ class UnborderedTableTests(unittest.TestCase):
         glyph = {"type": "f", "rect": pymupdf.Rect(100, 50, 110, 62), "items": []}
         self.assertEqual((P.thin_bar(bar), P.thin_bar(glyph)), ("v", None))
 
+    def test_light_gradient_slice_is_not_rule(self):
+        # 그라데이션 배경은 연한 색의 가는 띠 수백 개로 칠해진다.
+        dark = {"type": "f", "fill": (0.4, 0.4, 1.0), "rect": pymupdf.Rect(100, 50, 101, 90), "items": []}
+        light = {"type": "f", "fill": (0.7, 0.9, 1.0), "rect": pymupdf.Rect(100, 50, 101, 90), "items": []}
+        self.assertEqual((P.thin_bar(dark), P.thin_bar(light)), ("v", None))
+
 
 @requires_corpus
 class UnborderedSourceTests(unittest.TestCase):
@@ -90,11 +96,27 @@ class UnborderedSourceTests(unittest.TestCase):
         tables = self.recovered("doc_ebaf5c63866d198d", 3)
         self.assertEqual([t["rows"][0][0] for t in tables], ["구 분", "직능", "구분", "구분"])
 
-    def test_merged_columns_are_rejected_with_warning(self):
+    def test_columns_are_not_merged(self):
+        # 원래 페이지에서 찾으면 '매우 그렇다·만족·보통'이 한 칸으로 합쳐진다.
         doc = self.parse("doc_31668196b750198b")
         self.assertFalse([b for b in doc["blocks"] if b["kind"] == "table" and "매우 만족 보통 그렇다" in b["text"]])
-        self.assertTrue([w for w in doc["warnings"] if w["code"] == "table_unbordered_candidate" and w["page"] == 12])
-        self.assertTrue(next(p for p in doc["pages"] if p["page"] == 12).get("requires_vision"))
+        table = next(t for t in self.recovered("doc_31668196b750198b", 12) if t["rows"][0][0] == "평가항목")
+        self.assertEqual(table["rows"][1], ["(1) 직원들은 친절히 응대한다", "①", "②", "③", "④", "⑤", "⑥"])
+
+    def test_filled_page_table_is_found_on_rules_only(self):
+        # 채움 도형이 많아 원래 페이지에서는 같은 괘선으로도 표를 찾지 못한다.
+        table = self.recovered("doc_4911432da30f3fc4", 2)[0]
+        self.assertEqual(table["rows"][2], ["벽면이용간판 (가로·세로)", "91개", "87개", "-", "4개", ""])
+
+    def test_gradient_header_table_keeps_header_and_first_column(self):
+        table = self.recovered("doc_9d949f66ef7c0e47", 15)[0]
+        self.assertEqual(table["rows"][0], ["동 별", "학 교 명", "소 재 지", "개방 면수", "개방장소", "비 고"])
+
+    def test_middle_fragment_table_is_merged_into_recovered_table(self):
+        tables = self.recovered("doc_8218a7de95b5a25c", 3)
+        self.assertEqual(tables[0]["rows"][1], ["3,815", "1,092", "857", "235", "2,723", "28.6%"])
+        self.assertFalse([b for b in self.parse("doc_8218a7de95b5a25c")["blocks"]
+                          if b["kind"] == "table" and b["text"].startswith("(B=C+D)")])
 
 
 if __name__ == "__main__":
