@@ -79,6 +79,24 @@ class RowFragmentTests(unittest.TestCase):
         wide = [line("왼쪽 칸", (100, 50, 130, 60)), line("오른쪽 칸", (150, 50, 190, 60))]
         self.assertEqual(len(P.group_rows(wide, P.Stats())), 2)
 
+    def test_font_switch_fragments_join_despite_tiny_overlap(self):
+        # 가운뎃점에서 글꼴이 바뀌어 조각 상자가 0.06pt 겹친다.
+        parts = [line("총괄부서 → 국‧", (62.3, 668.5, 289.74, 685.4), 14),
+                 line("소‧", (289.68, 668.5, 310.74, 685.4), 14),
+                 line("본부장 → 시장", (310.68, 668.5, 478.8, 685.4), 14)]
+        self.assertEqual([j.text for j in P.group_rows(parts, P.Stats())], ["총괄부서 → 국‧소‧본부장 → 시장"])
+
+    def test_touching_number_fragment_joins(self):
+        parts = [line("4‧", (67.9, 302.8, 83.6, 318.3), 13), line("9호선 및 버스노선", (83.6, 302.8, 300, 318.3), 13)]
+        self.assertEqual([j.text for j in P.group_rows(parts, P.Stats())], ["4‧9호선 및 버스노선"])
+
+    def test_lone_bullet_fragment_joins_its_text(self):
+        parts = [line("‧", (58.3, 572.3, 65.1, 589.1), 13.8), line("운영 계획의 수립", (70.8, 572.3, 296.4, 589.1), 13.8)]
+        joined = P.group_rows(parts, P.Stats())
+        self.assertEqual(len(joined), 1)
+        block = P.classify(joined[0], 50, 1)
+        self.assertEqual((block.kind, block.marker_raw, block.text), ("item", "‧", "운영 계획의 수립"))
+
     def test_vertical_rules_ignore_filled_glyph_strokes(self):
         class Point:
             def __init__(self, x, y):
@@ -118,6 +136,12 @@ class SameRowSourceTests(unittest.TestCase):
     def test_justified_line_is_one_block(self):
         doc = self.parse("doc_f302215a42767bd8")
         self.assertTrue(any("고용노동부장관이 고시하는 최저임금액(시급 기준." in b["text"] for b in doc["blocks"]))
+
+    def test_detached_bullet_rejoins_its_sentence(self):
+        doc = self.parse("doc_31668196b750198b")
+        self.assertTrue(any(b["kind"] == "item" and b["marker"] == "◦" and "차원별 종합만족수준은 82.31점" in b["text"]
+                            and b["text"].endswith("82.21점 득점") for b in doc["blocks"]))
+        self.assertFalse([b for b in doc["blocks"] if b["kind"] == "para" and b["text"] == "◦"])
 
     def test_reading_order_contract_on_issue_documents(self):
         for identity in ("doc_8f8152f2e456ee9f", "doc_9d949f66ef7c0e47", "doc_c0d2268528dcf158",

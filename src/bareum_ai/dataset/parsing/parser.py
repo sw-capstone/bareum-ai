@@ -1639,6 +1639,8 @@ def join_row_fragments(
 
     표 칸 잔해나 도식 라벨을 잇지 않도록, 글자 크기·아래 경계가 같고 간격이 1em 이하이며
     두 조각 모두 글자를 포함할 때만 잇는다. 사이를 세로선이 가로지르면 다른 칸이라 잇지 않는다.
+    상자가 맞닿은 조각('4‧' + '9호선')은 숫자만 있어도, 글머리 기호만 떨어진 조각('‧')은
+    기호만 있어도 잇는다.
     """
     rules = rules or []
     out = [row[0]]
@@ -1652,13 +1654,18 @@ def join_row_fragments(
             left - 0.5 <= x <= right + 0.5 and y0 <= top + 1 and y1 >= bottom - 1
             for x, y0, y1 in rules
         )
+        # 글꼴이 바뀌는 자리('국‧' + '소‧')에서는 조각 상자가 0.1pt 남짓 겹친다.
         if (
-            0 <= gap <= size * ROW_FRAGMENT_MAX_GAP
+            -1.0 <= gap <= size * ROW_FRAGMENT_MAX_GAP
             and not divided
             and abs(prev.size - line.size) <= size * 0.15
             and abs(prev.bbox[3] - line.bbox[3]) <= 1.0
-            and WORD_CHAR_RE.search(prev.text)
             and WORD_CHAR_RE.search(line.text)
+            and (
+                WORD_CHAR_RE.search(prev.text)
+                or (gap <= 0.5 and re.search(r"\d", prev.text))
+                or (len(prev.text.strip()) == 1 and starts_new_block(f"{prev.text.strip()} {line.text}"))
+            )
         ):
             joiner = " " if gap > line.size * SPACE_GAP_RATIO else ""
             out[-1] = join_lines([prev, line], joiner, "row_fragments_joined", stats)
