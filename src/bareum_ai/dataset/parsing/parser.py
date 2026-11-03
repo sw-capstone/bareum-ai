@@ -73,6 +73,7 @@ CHAPTER_NO_RE = re.compile(r"^(\d{1,2}|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ])\.?$")
 ROW_FRAGMENT_MAX_GAP = 1.0
 ROW_LINE_HEIGHT_RATIO = 2.0
 WORD_CHAR_RE = re.compile(r"[가-힣A-Za-z]")
+CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 MULTI_SPACE_RE = re.compile(r"\s{2,}")
 LEADER_DOTS_RE = re.compile(r"[·․‧∙⋅.…]{4,}")
 APPROVAL_FIELD_RE = re.compile(
@@ -90,22 +91,24 @@ SYMBOL_SQUARE = "\uf000\uf06d\uf071"
 SYMBOL_CIRCLE = "\uf09e"
 MARKER_PATTERNS = [
     (1, "roman", re.compile(r"^([ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]\.?)\s*")),
-    (2, "number", re.compile(r"^(\d{1,2}\.)\s+(?!\d{1,2}\.)")),
-    (3, "square", re.compile(r"^([□■ㅁ▢▣◻◼❑❒])\s*")),
+    # '2. 14.', '2. 14(수)', '5. 30~31.' 처럼 번호 뒤에 일(日)이 오면 날짜다.
+    (2, "number", re.compile(r"^(\d{1,2}\.)\s+(?!\d{1,2}\s*[.(（~∼〜])")),
+    # 모양이 같은 변형 부호는 같은 층위로 본다. 원문 부호는 marker_raw 에 남는다.
+    (3, "square", re.compile(r"^([□■ㅁ▢▣◻◼❑❒❐❏☐∎])\s*")),
     (3, "square", re.compile(r"^([" + SYMBOL_SQUARE + r"])\s*")),
     (3, "square", re.compile(r"^([mq])\s+")),
-    (4, "circle", re.compile(r"^([ㅇ○◦●◯❍◎])\s*")),
+    (4, "circle", re.compile(r"^([ㅇ○◦●◯❍◎∘⦁])\s*")),
     (4, "circle", re.compile(r"^([oO])\s+")),
     (4, "circle", re.compile(r"^([" + SYMBOL_CIRCLE + r"])\s*")),
     (5, "dash", re.compile(r"^([-‐‑–—])(?:\s+|(?=\D))")),
-    (6, "dot", re.compile(r"^([·•∙‧▪▫‣․])\s*(?=\S)")),
+    (6, "dot", re.compile(r"^([·•∙‧▪▫‣․･・])\s*(?=\S)")),
     (6, "dot", re.compile(r"^([ㆍ])\s+")),
     (None, "note", re.compile(r"^([※*✱☞])\s*")),
     (None, "circled", re.compile(r"^([①-⑳])\s*(?=\S)")),
     (None, "paren", re.compile(r"^(\d{1,2}\))\s*(?=\S)")),
     (None, "hangul", re.compile(r"^([가나다라마바사아자차카타파하]\.)\s+")),
     (None, "paren", re.compile(r"^(\([0-9가-힣a-zA-Z]{1,3}\))\s*(?=\S)")),
-    (None, "shape", re.compile(r"^([◆◇▶▷★☆▲△▼▽])\s*(?=\S)")),
+    (None, "shape", re.compile(r"^([◆◇◈▶▷▸▹▻►★☆▲△▼▽✓➠❙§¦])\s*(?=\S)")),
 ]
 NONSTANDARD_TYPES = ("circled", "paren", "hangul", "shape")
 SYMBOL_MARKERS = SYMBOL_SQUARE + SYMBOL_CIRCLE + "mq"
@@ -113,6 +116,7 @@ HEADING_LEVELS = (1, 2)
 MAX_SECTION_DEPTH = 16
 SECTION_HEAD_MAX_CHARS = 20
 SENTENCE_ENDING = re.compile(r"(함|음|임|됨|짐|옴|바람|할것|하였음|이다|한다|합니다)$")
+HEAD_NOTE_RE = re.compile(r"[(（][^)）]*[)）]")
 RUNNING_KINDS = ("header", "footer", "page_number")
 STACKED_KINDS = ("heading", "item", "attachment")
 EXCLUDED_KINDS = RUNNING_KINDS + ("figure", "approval", "title_fragment")
@@ -265,6 +269,12 @@ def build_line(raw: dict, stats: Stats) -> Line | None:
         threshold = span["size"] * SPACE_GAP_RATIO
         for ch in span["chars"]:
             source_chars.append(ch["c"])
+            if CONTROL_CHAR_RE.fullmatch(ch["c"]):
+                # 글꼴이 공백 글리프를 제어 문자(\x01 등)로 내보낸다. 원문에는 남기고 본문은 공백으로 본다.
+                chars.append((" ", None, None))
+                source_length += len(ch["c"])
+                add_transformation(transformations, "control_chars_spaced")
+                continue
             if (
                 not ch["c"].isspace()
                 and prev is not None
@@ -519,14 +529,19 @@ def approval_hits(text: str) -> int:
 def heading_from_grid(
     grid: list[list[str]], larger_than_body: bool = False
 ) -> tuple[int, str, str] | None:
-    """도형 안 장 제목이 1행 2칸 표로 잡힌 것을 되살린다. ['Ⅰ', '사업개요'] → 1층위.
+    """도형 안 장 제목이 표로 잡힌 것을 되살린다. ['Ⅰ', '사업개요'] → 1층위.
 
+    비어 있지 않은 칸이 번호와 그 오른쪽 제목, 둘뿐인 표를 본다. 제목 밑줄 때문에
+    [['Ⅲ', ''], ['', '평가개요']]처럼 두 행으로 잡힌 상자도 여기에 든다.
     숫자 칸은 ['1', '홍길동'] 같은 데이터 표에도 흔하므로, 글자가 본문보다 클 때만
     제목으로 본다.
     """
-    if len(grid) != 1 or len(grid[0]) != 2:
+    filled = [
+        (c, cell.strip()) for row in grid for c, cell in enumerate(row) if cell.strip()
+    ]
+    if len(filled) != 2 or filled[0][0] >= filled[1][0]:
         return None
-    head, body = grid[0][0].strip(), grid[0][1].strip()
+    head, body = filled[0][1], filled[1][1]
     m = TITLE_CELL_MARKER_RE.match(head)
     if not m or not (2 <= len(body) <= 30):
         return None
@@ -534,6 +549,23 @@ def heading_from_grid(
     if level == 2 and not larger_than_body:
         return None
     return level, head, body
+
+
+def chapter_number_box(grid: list[list[str]], box: tuple, outside: list[Line]) -> bool:
+    """로마 숫자 한 칸뿐인 표 오른쪽, 같은 행에 짧은 제목 줄이 있는가.
+
+    장 번호 상자만 표로 잡히고 제목은 표 밖에 남는 경우다(['Ⅲ', ''] 표).
+    """
+    filled = [cell.strip() for row in grid for cell in row if cell.strip()]
+    if len(filled) != 1 or not re.fullmatch(r"[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]\.?", filled[0]):
+        return False
+    return any(
+        y_overlap(box, line.bbox) > ROW_OVERLAP_RATIO
+        and 0 <= text_left(line) - box[2] <= line.size * 4
+        and len(line.text) <= 30
+        and WORD_CHAR_RE.search(line.text)
+        for line in outside
+    )
 
 
 def table_heading_hint(grid: list[list[str]], larger_than_body: bool) -> dict:
@@ -547,7 +579,11 @@ def table_heading_hint(grid: list[list[str]], larger_than_body: bool) -> dict:
         r"(?:개요|배경|목적|계획|현황|내용|결과|일정|방법|방향|예산|대상|절차|범위|필요성|문제점|성과|경과)$",
         label,
     )) and not SENTENCE_ENDING.search(label)
-    confirmed = label_evidence and (level == 1 or larger_than_body)
+    # 로마 번호와 큰 글씨는 표제어 없이도 장 제목 근거로 충분하다. 표제어 사전은 sections.yaml 이
+    # 맡으므로 파서는 그 목록에 기대지 않는다. 숫자 번호는 데이터 표와 헷갈려 표제어도 요구한다.
+    confirmed = (level == 1 and (larger_than_body or label_evidence)) or (
+        label_evidence and larger_than_body
+    )
     return {"status": "confirmed" if confirmed else "needs_review",
             "level": level, "marker": marker, "text": text,
             "evidence": [e for e, found in (("section_label", label_evidence),
@@ -969,6 +1005,10 @@ def extract_tables(
         ):
             continue
 
+        if chapter_number_box(compact, table.bbox, [remaining[i] for i in remaining if i not in inside]):
+            # 번호 칸만 감싼 상자다. 표로 만들지 않고 줄로 남겨 같은 행 제목과 결합한다.
+            continue
+
         size = max((remaining[i].size for i in inside), default=0.0)
         body = body_size([remaining[i] for i in remaining if i not in inside])
         hint = table_heading_hint(
@@ -1025,7 +1065,8 @@ def extract_tables(
                 heading_hint=hint,
                 level=hint["level"] if hint.get("status") == "confirmed" else None,
                 marker=hint["marker"] if hint.get("status") == "confirmed" else None,
-                marker_raw=compact_source[0][0].strip() if hint.get("status") == "confirmed" else None,
+                marker_raw=next(c for row in compact_source for c in row if c.strip()).strip()
+                if hint.get("status") == "confirmed" else None,
                 marker_normalized=hint["marker"].rstrip(".") + "." if hint.get("status") == "confirmed" else None,
                 marker_type=("roman" if hint["level"] == 1 else "number") if hint.get("status") == "confirmed" else None,
                 transformations=sorted(transformations),
@@ -1869,10 +1910,15 @@ def build_sections(blocks: list[Block], document_id: str) -> list[Section]:
     def looks_like_head(block: Block) -> bool:
         if block.kind == "attachment":
             return True
-        text = re.sub(r"\s+", "", head_text(block))
+        text = head_text(block)
+        if block.level == 1 and block.marker_type == "roman":
+            # 로마 숫자 장 제목은 괄호 설명을 빼고 잰다('운영 상 문제점 (운영체계 개선배경)').
+            # 다른 항목까지 빼면 '소요예산: …(금…원)' 같은 값 항목이 장이 된다.
+            text = HEAD_NOTE_RE.sub("", text)
+        text = re.sub(r"\s+", "", text)
         if not text or len(text) > SECTION_HEAD_MAX_CHARS:
             return False
-        return not SENTENCE_ENDING.search(text)
+        return text.endswith("붙임") or not SENTENCE_ENDING.search(text)
 
     index = {b.id: b for b in blocks}
     candidates = {
@@ -1998,6 +2044,24 @@ def mark_document_title(blocks: list[Block], page_height: float) -> None:
         other.kind = "title_fragment"
         other.excluded_from_retrieval = True
         break
+
+    # 윤곽선·그림자로 겹쳐 찍힌 제목은 어긋난 조각('2021년', '년 언론수용자' …)으로도 추출된다.
+    title_chars = set(re.sub(r"\s+", "", title.text))
+    for other in blocks:
+        chars = set(re.sub(r"\s+", "", other.text))
+        if (
+            other is not title
+            and other.kind == "para"
+            and other.page == title.page
+            and chars
+            and chars <= title_chars
+            and y_overlap(title.bbox, other.bbox) > ROW_OVERLAP_RATIO
+            and title.bbox[0] - 2 <= other.bbox[0]
+            and other.bbox[2] <= title.bbox[2] + 2
+        ):
+            other.kind = "title_fragment"
+            other.excluded_from_retrieval = True
+            add_transformation(other.transformations, "overlapping_title_copy")
 
 
 def recover_decorative_headings(
