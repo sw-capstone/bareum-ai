@@ -28,7 +28,7 @@ SCHEMA_VERSION = "1.2.0"
 
 SPACE_GAP_RATIO = 0.15
 DUP_OVERLAP_RATIO = 0.8
-WRAP_MAX_SHORTFALL = 0.6
+WRAP_MAX_SHORTFALL = 1.0
 WRAP_MAX_VGAP = 1.2
 CELL_LINEBREAK_POLICY = "preserve-boundaries-v1"
 CELL_RANGE_END_RE = re.compile(r"\d[\d\s.년월일시분초:/-]*[∼~〜]$")
@@ -71,6 +71,13 @@ SECTION_NO_RE = re.compile(r"^(\d{1,2})\.?$")
 # 같은 행의 제목과 결합할 장 번호. 장식 제목 복구는 2층위로 고정하므로 SECTION_NO_RE 를 따로 둔다.
 CHAPTER_NO_RE = re.compile(r"^(\d{1,2}|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ])\.?$")
 ROW_FRAGMENT_MAX_GAP = 1.0
+# '○ 일   자 :'처럼 글자 사이를 벌린 항목 이름은 조각 간격이 3em 까지 벌어진다.
+SPACED_LABEL_MAX_GAP = 3.0
+SPACED_LABEL_HEAD_RE = re.compile(r"(?:^|[^가-힣])[가-힣]$")
+SPACED_LABEL_TAIL_RE = re.compile(r"^[가-힣]{1,3}\s*[:：]|^[가-힣]{1,2}$")
+UNIT_CAPTION_RE = re.compile(r"^\(?\s*단\s*위\s*[:：]")
+# 제목 위에 따로 놓는 표어('- 행정안전부 주관 -'). 앞뒤 줄과 한 문단으로 잇지 않는다.
+DASHED_LABEL_RE = re.compile(r"^[-‐‑–—].+[-‐‑–—]$")
 ROW_LINE_HEIGHT_RATIO = 2.0
 WORD_CHAR_RE = re.compile(r"[가-힣A-Za-z]")
 UNBORDERED_MIN_WIDTH = 40.0
@@ -102,7 +109,8 @@ MARKER_PATTERNS = [
     (4, "circle", re.compile(r"^([ㅇ○◦●◯❍◎∘⦁])\s*")),
     (4, "circle", re.compile(r"^([oO])\s+")),
     (4, "circle", re.compile(r"^([" + SYMBOL_CIRCLE + r"])\s*")),
-    (5, "dash", re.compile(r"^([-‐‑–—])(?:\s+|(?=\D))")),
+    # '- 문산보건지소 -'처럼 양 끝을 대시로 감싼 표어는 글머리가 아니다(DASHED_LABEL_RE).
+    (5, "dash", re.compile(r"^([-‐‑–—])(?:\s+|(?=\D))(?!.+[-‐‑–—]\s*$)")),
     (6, "dot", re.compile(r"^([·•∙‧▪▫‣․･・])\s*(?=\S)")),
     (6, "dot", re.compile(r"^([ㆍ])\s+")),
     (None, "note", re.compile(r"^([※*✱☞])\s*")),
@@ -1075,6 +1083,26 @@ def recover_unbordered_tables(page, drawings: list[dict], tables: list, warnings
     return tables, recovered
 
 
+def drop_unit_caption_rows(tables: list, lines: list[Line]) -> dict[tuple, tuple]:
+    """표 바깥 위의 '(단위 : 원)' 줄만 담은 첫 행을 표에서 뺀다. 그 줄은 본문으로 남는다.
+
+    find_tables 의 표는 셀 목록에서 행과 bbox 를 계산하므로 셀만 걸러 낸다.
+    바뀐 표의 bbox 를 {이전: 이후}로 돌려준다.
+    """
+    moved = {}
+    for table in tables:
+        rows = table.rows
+        if len(rows) < 2 or getattr(table, "_bbox", None) is not None:
+            continue
+        top = getattr(rows[0], "bbox", None)
+        inside = [line for line in lines if top and any(center_in(w.bbox, top) for w in line.words)]
+        if inside and all(UNIT_CAPTION_RE.match(line.text) for line in inside):
+            old = tuple(table.bbox)
+            table.cells = [c for c in table.cells if c[1] >= rows[1].bbox[1] - 0.5]
+            moved[old] = tuple(table.bbox)
+    return moved
+
+
 def extract_tables(
     page, lines: list[Line], stats: Stats, warnings: list[dict],
     approval_regions: list[dict] | None = None,
@@ -1110,6 +1138,10 @@ def extract_tables(
                         replacements.append(table)
                 found = replacements
         found, unbordered = recover_unbordered_tables(page, drawings, found, warnings)
+        for old, new in drop_unit_caption_rows(found, lines).items():
+            for keys in (gradient_fixed, glyph_fixed, recovered, unbordered):
+                if old in keys:
+                    keys.add(new)
     except Exception as exc:
         warnings.append(
             {
@@ -1631,8 +1663,8 @@ def join_row_fragments(
 
     표 칸 잔해나 도식 라벨을 잇지 않도록, 글자 크기·아래 경계가 같고 간격이 1em 이하이며
     두 조각 모두 글자를 포함할 때만 잇는다. 사이를 세로선이 가로지르면 다른 칸이라 잇지 않는다.
-    상자가 맞닿은 조각('4‧' + '9호선')은 숫자만 있어도, 글머리 기호만 떨어진 조각('‧')은
-    기호만 있어도 잇는다.
+    상자가 맞닿은 조각('｢' + '책을', '4‧' + '9호선')과 글머리 기호만 떨어진 조각('‧')은
+    앞 조각에 글자가 없어도 잇는다. 글자 사이를 벌린 항목 이름('○ 일' + '자 :')은 3em 까지 잇는다.
     """
     rules = rules or []
     out = [row[0]]
@@ -1646,20 +1678,23 @@ def join_row_fragments(
             left - 0.5 <= x <= right + 0.5 and y0 <= top + 1 and y1 >= bottom - 1
             for x, y0, y1 in rules
         )
+        spaced_label = bool(
+            SPACED_LABEL_HEAD_RE.search(prev.text) and SPACED_LABEL_TAIL_RE.match(line.text)
+        )
         # 글꼴이 바뀌는 자리('국‧' + '소‧')에서는 조각 상자가 0.1pt 남짓 겹친다.
         if (
-            -1.0 <= gap <= size * ROW_FRAGMENT_MAX_GAP
+            -1.0 <= gap <= size * (SPACED_LABEL_MAX_GAP if spaced_label else ROW_FRAGMENT_MAX_GAP)
             and not divided
             and abs(prev.size - line.size) <= size * 0.15
             and abs(prev.bbox[3] - line.bbox[3]) <= 1.0
             and WORD_CHAR_RE.search(line.text)
             and (
                 WORD_CHAR_RE.search(prev.text)
-                or (gap <= 0.5 and re.search(r"\d", prev.text))
+                or gap <= 0.5
                 or (len(prev.text.strip()) == 1 and starts_new_block(f"{prev.text.strip()} {line.text}"))
             )
         ):
-            joiner = " " if gap > line.size * SPACE_GAP_RATIO else ""
+            joiner = " " if gap > line.size * SPACE_GAP_RATIO and not spaced_label else ""
             out[-1] = join_lines([prev, line], joiner, "row_fragments_joined", stats)
         else:
             out.append(line)
@@ -1696,6 +1731,15 @@ def group_rows(
                 join_lines([number, row[1]], " ", "section_number_joined", stats),
                 *row[2:],
             ]
+        attachment = ATTACHMENT_RE.match(row[0].text.strip()) if len(row) >= 2 else None
+        if (
+            attachment
+            and attachment.end() == len(row[0].text.strip())
+            and re.search(r"[가-힣A-Za-z\d]", row[1].text)
+            and row[1].bbox[0] - row[0].bbox[2] <= max(row[0].size, row[1].size) * 4
+        ):
+            # '붙임 2' 상자와 같은 행의 붙임 제목을 잇는다. 따로 두면 제목 없는 붙임 구간이 된다.
+            row = [join_lines(row[:2], " ", "attachment_label_joined", stats), *row[2:]]
         out.extend(join_row_fragments(row, stats, rules))
     return out
 
@@ -1737,7 +1781,7 @@ def join_vertical_runs(lines: list[Line], stats: Stats) -> list[Line]:
 
 
 def starts_new_block(text: str) -> bool:
-    return bool(ATTACHMENT_RE.match(text)) or any(
+    return bool(ATTACHMENT_RE.match(text) or DASHED_LABEL_RE.match(text.strip())) or any(
         pattern.match(text) for _, _, pattern in MARKER_PATTERNS
     )
 
@@ -1786,7 +1830,8 @@ def merge_wrapped(
     paragraphs: list[Line] = []
     # 문단마다 첫 줄의 글자 시작과 마지막 줄(끝 x, 글자)을 따로 둔다. 문단 bbox 는 줄을 합친
     # 범위라, 둘째 줄이 짧게 끝나도 첫 줄의 오른쪽 끝을 그대로 들고 있다.
-    heads: list[float] = []
+    # 첫 줄이 '필요성 : …'처럼 이름과 값이면 값의 시작도 둔다. 다음 줄이 그 자리에 맞춰 들여쓴다.
+    heads: list[tuple[float, float | None]] = []
     tails: list[tuple[float, str]] = []
     for i, line in enumerate(lines):
         if paragraphs:
@@ -1796,14 +1841,20 @@ def merge_wrapped(
             vgap = line.bbox[1] - prev.bbox[3]
             # 줄 박스는 앞쪽 공백까지 포함해 들여쓴 줄의 시작이 실제보다 왼쪽에 잡힌다.
             # 앞 줄이 문장으로 끝나지 않았을 때만 실제 글자 시작으로 다시 비교한다.
+            head_left, value_left = heads[-1]
+            start = max(text_left(line), line.bbox[0])
             aligned = abs(line.bbox[0] - prev.bbox[0]) <= prev.size * 2 or (
-                abs(max(text_left(line), line.bbox[0]) - heads[-1]) <= prev.size * 2
-                and not ends_sentence(tail_text)
+                not ends_sentence(tail_text)
+                and (
+                    abs(start - head_left) <= prev.size * 2
+                    or (value_left is not None and abs(start - value_left) <= prev.size)
+                )
             )
             smaller_continuation = continues_smaller_list_text(prev, line)
+            # 줄 사이에 놓인 그림·표만 막는다. 줄 안의 작은 그림은 줄 아래로 1pt 안쪽 삐져나온다.
             blocked = any(
-                box[1] < line.bbox[1]
-                and box[3] > prev.bbox[3]
+                box[1] < line.bbox[1] - 1
+                and box[3] > prev.bbox[3] + 1
                 and box[0] < max(prev.bbox[2], line.bbox[2])
                 and box[2] > min(prev.bbox[0], line.bbox[0])
                 for box in barriers
@@ -1820,6 +1871,7 @@ def merge_wrapped(
                 and i - 1 not in ambiguous
                 and not blocked
                 and not starts_new_block(line.text)
+                and not DASHED_LABEL_RE.match(tail_text.strip())
             ):
                 joiner = " " if prev.trailing_space or smaller_continuation else ""
                 source_offset = len(prev.source_text) + 1
@@ -1842,9 +1894,17 @@ def merge_wrapped(
                 line, words=list(line.words), transformations=list(line.transformations)
             )
         )
-        heads.append(text_left(line))
+        heads.append((text_left(line), label_value_left(line)))
         tails.append((line.bbox[2], line.text))
     return paragraphs
+
+
+def label_value_left(line: Line) -> float | None:
+    """'필요성 : 고질적인…'의 값('고질적인')이 시작하는 x. 이름 뒤 쌍점이 앞쪽 다섯 어절 안에 있어야 한다."""
+    for word, following in zip(line.words[:5], line.words[1:6]):
+        if word.text.endswith((":", "：")):
+            return following.bbox[0]
+    return None
 
 
 def ends_sentence(text: str) -> bool:
@@ -2176,7 +2236,8 @@ def build_sections(blocks: list[Block], document_id: str) -> list[Section]:
             # 다른 항목까지 빼면 '소요예산: …(금…원)' 같은 값 항목이 장이 된다.
             text = HEAD_NOTE_RE.sub("", text)
         text = re.sub(r"\s+", "", text)
-        if not text or len(text) > SECTION_HEAD_MAX_CHARS:
+        # '• • •' 같은 장식 줄은 글자가 없어 구간 이름이 되지 못한다.
+        if not WORD_CHAR_RE.search(text) or len(text) > SECTION_HEAD_MAX_CHARS:
             return False
         return text.endswith("붙임") or not SENTENCE_ENDING.search(text)
 
@@ -2262,6 +2323,7 @@ def mark_document_title(blocks: list[Block], page_height: float) -> None:
         and TITLE_MIN_CHARS <= len(b.text) <= TITLE_MAX_CHARS
         and b.size >= floor
         and not ORG_NAME_RE.fullmatch(re.sub(r"\s+", "", b.text))
+        and not DASHED_LABEL_RE.match(b.text.strip())
     ]
     if not candidates:
         return
