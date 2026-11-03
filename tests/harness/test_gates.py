@@ -11,6 +11,7 @@ from bareum_ai.harness.gates import (
     check_confidence,
     check_final,
     run_gates,
+    withheld,
 )
 
 CANDIDATES = frozenset({"law1:3", "law1:5"})
@@ -44,6 +45,17 @@ def test_confidence_missing_score_holds_regulation():
 def test_confidence_ignored_for_other_tasks():
     assert check_confidence("expression", None, min_confidence=0.7) is None
     assert check_confidence("revise", 0.0, min_confidence=0.7) is None
+
+
+def test_confidence_hold_builds_withheld_without_model_response():
+    # 관문 ⓪은 호출 전에 막으므로 모델 응답 없이 보류 판정을 만들 수 있어야 한다.
+    decision = check_confidence("regulation", 0.1, min_confidence=0.7)
+    assert withheld("s1", decision.hold_reason) == Judgment(
+        sentence_id="s1",
+        verdict=WITHHELD,
+        evidence=(),
+        hold_reason=HoldReason.LOW_CONFIDENCE,
+    )
 
 
 # 관문 ② 조문 실재 검사
@@ -85,26 +97,21 @@ def test_non_violation_without_evidence_passes():
     assert check_final(j, CANDIDATES) is None
 
 
-# 관문 조합
+# 응답 후 관문 조합
 
 
 def test_all_gates_pass_exposes():
-    decision = run_gates("regulation", 0.9, violation("law1:3"), CANDIDATES, min_confidence=0.7)
+    decision = run_gates(violation("law1:3"), CANDIDATES)
     assert decision == Decision(Outcome.EXPOSE)
 
 
-def test_confidence_gate_runs_before_article_gate():
-    decision = run_gates("regulation", 0.1, violation("law9:1"), CANDIDATES, min_confidence=0.7)
-    assert decision == Decision(Outcome.HOLD, HoldReason.LOW_CONFIDENCE)
-
-
 def test_fake_article_is_discarded_before_final_gate():
-    decision = run_gates("regulation", 0.9, violation("law9:1"), CANDIDATES, min_confidence=0.7)
+    decision = run_gates(violation("law9:1"), CANDIDATES)
     assert decision == Decision(Outcome.DISCARD)
 
 
 def test_violation_without_evidence_holds_with_downgrade():
-    decision = run_gates("regulation", 0.9, violation(), CANDIDATES, min_confidence=0.7)
+    decision = run_gates(violation(), CANDIDATES)
     assert decision == Decision(Outcome.HOLD, HoldReason.VERIFICATION_DOWNGRADE)
 
 

@@ -2,10 +2,13 @@
 
 모델 호출·재시도·trace와 무관한 순수 함수만 둔다. 관문 ① 스키마 검사는 스키마 소유가
 정해진 뒤 추가한다. 각 check_* 는 통과하면 None, 막으면 Decision을 돌려준다.
+
+관문 ⓪은 모델 호출 전에 check_confidence로 확인하고, 막히면 호출 없이 withheld로 보류
+판정을 만든다. ②·③은 호출 후 run_gates로 확인하고 apply_decision으로 응답에 반영한다.
 """
 
 from collections.abc import Collection
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from enum import Enum
 
 VIOLATION = "위반가능"
@@ -46,6 +49,13 @@ class Decision:
     hold_reason: HoldReason | None = None
 
 
+def withheld(sentence_id: str, hold_reason: HoldReason) -> Judgment:
+    """근거 없는 판단보류 판정을 만든다. 호출 전 보류는 모델 응답 없이 이것만 쓴다."""
+    return Judgment(
+        sentence_id=sentence_id, verdict=WITHHELD, evidence=(), hold_reason=hold_reason
+    )
+
+
 def check_confidence(
     task: str, score: float | None, min_confidence: float
 ) -> Decision | None:
@@ -75,17 +85,10 @@ def check_final(judgment: Judgment, candidates: Collection[str]) -> Decision | N
     return None
 
 
-def run_gates(
-    task: str,
-    score: float | None,
-    judgment: Judgment,
-    candidates: Collection[str],
-    min_confidence: float,
-) -> Decision:
-    """⓪ → ② → ③ 순서로 확인하고, 모두 통과하면 노출한다."""
+def run_gates(judgment: Judgment, candidates: Collection[str]) -> Decision:
+    """모델 응답을 ② → ③ 순서로 확인하고, 모두 통과하면 노출한다."""
     return (
-        check_confidence(task, score, min_confidence)
-        or check_article_exists(judgment, candidates)
+        check_article_exists(judgment, candidates)
         or check_final(judgment, candidates)
         or Decision(Outcome.EXPOSE)
     )
@@ -97,6 +100,4 @@ def apply_decision(judgment: Judgment, decision: Decision) -> Judgment | None:
         return judgment
     if decision.outcome is Outcome.DISCARD:
         return None
-    return replace(
-        judgment, verdict=WITHHELD, evidence=(), hold_reason=decision.hold_reason
-    )
+    return withheld(judgment.sentence_id, decision.hold_reason)
