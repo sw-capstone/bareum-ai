@@ -34,7 +34,7 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --locked
       - name: Test AI application
-        run: uv run --no-sync pytest
+        run: uv run --no-sync python -m pytest
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Build ARM64 image without publishing

@@ -19,6 +19,9 @@ jobs:
       - run: ./scripts/test-harness.sh
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --frozen
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - run: ./scripts/test-app.sh
       - if: always()
         uses: actions/upload-artifact@v4

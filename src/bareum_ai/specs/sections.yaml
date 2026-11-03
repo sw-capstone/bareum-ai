@@ -1,0 +1,234 @@
+# =============================================================================
+# sections.yaml — 공공보고서 섹션 태깅 사전
+#
+# 공공보고서 규정·품질 검증 코파일럿
+#
+# 이 파일은 '문서의 어디인가'를 답한다. 표제 문자열만 보고 결정론적으로 붙인다.
+# '이 문장이 무슨 일을 하는가'는 moves.yaml 이 답한다. 둘은 다른 층이다.
+#
+#   parser.py  ─→ sections[].section_id      구간 경계와 식별자 (의미 없음)
+#   이 파일    ─→ sections[].tag             구간의 종류
+#   moves.yaml ─→ blocks[].annotations       블록의 기능별 판정 (LLM)
+#
+# 파서에 이 사전을 넣지 않는다. 체계가 바뀔 때마다 172개 PDF 를 다시 파싱해야 한다.
+# =============================================================================
+
+meta:
+  version: "1.2"
+  consumes: "파서 출력 스키마 1.0.0 — sections[], blocks[].section_id"
+  derived_from:
+    corpus: "보고서/{계획보고서,결과보고서} 172개 문서 (계획 82 / 결과 90)"
+    sections_observed: 1095      # 장(章) 기준. 문서당 평균 6.4 · 중앙값 5
+  policy:
+    id_immutable: true
+    lexicon_is_seed: true        # 못 붙인 구간은 SEC_UNKNOWN 으로 남긴다. 추측하지 않는다
+    no_semantics_in_parser: true
+
+# -----------------------------------------------------------------------------
+# 태깅 절차
+# -----------------------------------------------------------------------------
+tagging:
+  layer: "sections[] 전부"   # 파서가 이미 장(章)만 남긴 평평한 목록이라 고를 것이 없다
+  # 장 안의 하위 항목은 섹션이 아니라 블록이다. 그 정체는 moves.yaml 이 답한다.
+  # 상위 구간의 태그를 아래로 상속하지 않는다 — 그 상속이 v0.1 이 실패한 원인이었다.
+  match:
+    - "1) 표제 정규화 후 lexicon 완전일치"
+    - "2) 실패 시 표제 시작 부분 일치 (3자 이상)"
+    - "3) 그래도 없으면 SEC_UNKNOWN. 포함 매칭은 쓰지 않는다"
+  normalize: "괄호·앞머리 번호 제거, 콜론 뒤 값 제거, 공백 전부 제거"
+  # 느슨한 포함 매칭은 쓰지 않는다. 이전 버전에서 전체 매칭의 14%를 차지하면서
+  # 'X년 □□□시설운영계획'(문서 제목)을 추진계획 섹션으로 잡았다.
+
+# -----------------------------------------------------------------------------
+# 섹션 태그
+#
+#   group  옛 Move 층에 해당하는 파생 속성. 라벨링 결정이 아니라 조회다
+#   source parser  파서가 kind 로 이미 가려낸 것. 사전을 보지 않는다
+# -----------------------------------------------------------------------------
+tags:
+
+  SEC_TITLE:
+    name: 제목
+    source: parser              # kind == document_title
+    group: null
+
+  SEC_OVERVIEW:
+    name: 개요
+    group: FRAME
+    note: 매뉴얼상 개요는 주체·대상·목적·방법을 5줄로 압축한 구간이다. 목적 표제도 여기 든다
+    lexicon: [개요, 사업개요, 추진개요, 행사개요, 운영개요, 과업개요, 용역개요, 공연개요,
+              교육개요, 점검개요, 회의개요, 목적, 사업목적, 추진목적, 목적및목표,
+              목표, 사업목표, 추진목표, 추진방향, 사업방향,
+              운영목적, 구매목적, 사업개요및목적]
+
+  SEC_BACKGROUND:
+    name: 추진 배경
+    group: WARRANT
+    lexicon: [추진배경, 배경, 추진경위, 필요성, 추진필요성]
+
+  SEC_GROUNDS:
+    name: 추진 근거
+    group: WARRANT
+    lexicon: [추진근거, 관련근거, 근거, 법적근거, 관련법령, 관련규정, 관련지침, 관련계획]
+
+  SEC_STATUS:
+    name: 현황
+    group: WARRANT
+    lexicon: [현황, 일반현황, 추진현황, 운영현황, 사업현황, 실태,
+              그간추진현황, 운영현황및실태]
+
+  SEC_PROBLEM:
+    name: 문제점
+    group: WARRANT
+    lexicon: [문제점, 현황및문제점, 문제점및원인, 애로사항, 개선필요사항]
+
+  SEC_PLAN:
+    name: 해결·추진 방안
+    group: SUBSTANCE
+    lexicon: [추진계획, 세부추진계획, 해결방안, 추진방안, 개선방안, 추진전략,
+              운영계획, 세부계획, 시행계획, 홍보계획, 주요사업]
+
+  SEC_CONTENT:
+    name: 추진 내용
+    group: SUBSTANCE
+    note: 검토보고서의 '검토 내용', 상황보고서의 '주요 상황'이 차지하는 자리도 여기다
+    lexicon: [추진내용, 세부추진내용, 사업내용, 주요내용, 세부내용, 추진경과,
+              운영내역, 홍보내역, 수행내역, 운영방법, 검토내용, 주요상황, 회의내용,
+              추진방법, 운영내용, 구매방식, 지도단속방법]
+
+  SEC_RESULT:
+    name: 추진 결과
+    group: SUBSTANCE
+    lexicon: [추진결과, 세부추진결과, 사업결과, 운영결과, 추진실적, 추진성과, 주요추진성과,
+              시행결과, 실시결과, 점검결과, 조사결과, 선정결과, 검토결과, 이용현황, 성과,
+              결과보고, 공연성과, 시행성과]
+
+  SEC_EFFECT:
+    name: 기대 효과
+    group: APPRAISAL
+    note: 앞으로 생길 편익. 이미 관측된 변화는 SEC_RESULT 다
+    lexicon: [기대효과, 기대성과, 사업효과, 추진목표및기대효과]
+
+  SEC_ASSESSMENT:
+    name: 평가·시사점
+    group: APPRAISAL
+    note: 한 일에 대한 회고. SEC_EFFECT 와 방향이 반대라 같은 칸에 두지 않는다
+    lexicon: [총평, 평가, 자체평가, 운영평가및개선사항, 시사점, 성과분석, 분석결과,
+              평가결과, 효과분석, 만족도, 성과및한계, 문제점및개선사항]
+
+  SEC_FOLLOWUP:
+    name: 행정·향후 사항
+    group: FORWARD
+    lexicon: [행정사항, 조치사항, 협조사항, 향후계획, 향후추진계획, 향후추진절차,
+              향후조치계획, 후속조치, 건의사항, 기타]
+
+  SEC_RESOURCE:
+    name: 예산·일정·체계
+    group: null                 # 순서에 매이지 않는다. 아래 unordered 참조
+    lexicon: [소요예산, 집행예산, 예산집행내역, 지출예산, 예산, 예산과목, 사업비, 총사업비,
+              사업예산, 소요재원, 재원조달, 추진일정, 일정, 세부일정, 향후일정, 추진절차,
+              추진체계, 추진조직, 조직및인력, 소요인력, 인력운영, 업무분장,
+              세부내역, 세부집행내역, 정산내역, 예산집행현황, 주요일정, 주요추진일정, 입찰진행일정, 운영인력]
+
+  SEC_ANNEX:
+    name: 붙임
+    source: parser              # kind == attachment. 119건이 부호 없이 나와 파서가 따로 가려낸다
+    group: null
+
+  SEC_OTHER:
+    name: 체계 밖
+    note: 표제는 읽었으나 이 체계에 자리가 없는 것. 순서 검사에서 제외하되 본문 검사를 일괄 제외하지 않는다
+
+  SEC_UNKNOWN:
+    name: 미상
+    note: 사전에 없는 표제. 사전 확장 대상이며 그 수를 보고한다
+
+# -----------------------------------------------------------------------------
+# 표준 목차 — STR-03(필수 섹션) · STR-04(섹션 순서)가 소비한다
+#
+# 매뉴얼 제1장의 목차를 태그로 옮긴 것이다. any_of 는 매뉴얼이 두 항목을 한 슬롯으로
+# 묶어 둔 자리다('현황 및 문제점').
+# -----------------------------------------------------------------------------
+# 작성 목적·업무 주제와 별도로 선택한 outline_id 로 조회한다.
+# 적용 대상은 매뉴얼 제1장 1~5항을 따른다. 행사교육의 구체적 대상 조건을 우선 확인한다.
+outlines:
+
+  기획:
+    required: [SEC_TITLE, SEC_OVERVIEW, SEC_BACKGROUND,
+               {any_of: [SEC_STATUS, SEC_PROBLEM]},
+               SEC_PLAN, SEC_EFFECT, SEC_FOLLOWUP]
+    order:    [SEC_TITLE, SEC_OVERVIEW, SEC_BACKGROUND, SEC_STATUS, SEC_PROBLEM,
+               SEC_PLAN, SEC_EFFECT, SEC_FOLLOWUP]
+
+  상황:
+    required: [SEC_TITLE, SEC_OVERVIEW, SEC_BACKGROUND, SEC_CONTENT,
+               SEC_ASSESSMENT, SEC_FOLLOWUP]
+    order:    [SEC_TITLE, SEC_OVERVIEW, SEC_BACKGROUND, SEC_CONTENT,
+               SEC_ASSESSMENT, SEC_FOLLOWUP]
+
+  결과:
+    required: [SEC_TITLE, SEC_OVERVIEW, SEC_BACKGROUND, SEC_CONTENT,
+               SEC_RESULT, SEC_EFFECT, SEC_FOLLOWUP]
+    order:    [SEC_TITLE, SEC_OVERVIEW, SEC_BACKGROUND, SEC_CONTENT,
+               SEC_RESULT, SEC_EFFECT, SEC_FOLLOWUP]
+
+  검토:
+    required: [SEC_TITLE, SEC_OVERVIEW, SEC_BACKGROUND, SEC_CONTENT,
+               SEC_RESULT, SEC_FOLLOWUP]
+    order:    [SEC_TITLE, SEC_OVERVIEW, SEC_BACKGROUND, SEC_CONTENT,
+               SEC_RESULT, SEC_FOLLOWUP]
+
+  행사교육:
+    # 매뉴얼 제1장 5항. 배경이 개요보다 앞이다. 실측에서도 개요·배경을 모두 최상위에
+    # 둔 69개 문서 중 9개(13%)가 이 순서였다. 전역 단일 순서로는 이들이 전부 오탐이 된다
+    required: [SEC_TITLE, SEC_BACKGROUND, SEC_OVERVIEW,
+               {any_of: [SEC_PLAN, SEC_RESULT]}, SEC_FOLLOWUP]
+    order:    [SEC_TITLE, SEC_BACKGROUND, SEC_OVERVIEW, SEC_PLAN, SEC_RESULT,
+               SEC_FOLLOWUP]
+
+outline_selection:
+  input: outline_id
+  lookup: outlines[outline_id]
+  source:
+    manual: "보고서 작성 종합 매뉴얼, 제1장 1~5항"
+    text_sha256: "fb4437370e0fc0f0151fbb0e8311ed721cb873772ded9f7e33dc9ea48891de73"
+    interpretation: "행사교육 조건 충족 시 일반 기획·결과보다 우선하는 것은 제1장 5항의 별도 목차를 적용하기 위한 운영 기준이다"
+  applicability_conditions:
+    기획:
+      - "사업·정책·과제의 현황이나 문제를 바탕으로 해결 방안 또는 추진 계획을 제안하고 의사결정을 구하는 것이 문서의 주된 목적이다"
+    상황:
+      - "재난·위기·정세 변화 등 특정 상황이나 진행 동향을 신속하게 공유하는 것이 문서의 주된 목적이다. 완료된 업무 성과의 최종 보고와 구분한다"
+    결과:
+      - "완료된 사업·업무의 수행 내용과 성과를 보고하고 후속 조치 판단을 구하는 것이 문서의 주된 목적이다. 특정 사안의 대안 검토 결과를 보고하는 검토보고서와 구분한다"
+    검토:
+      - "정책 건의·민원·용역·계약 등 특정 사안의 현황과 대안을 분석하고 적정성 또는 선택에 대한 판단을 구하는 것이 문서의 주된 목적이다"
+    행사교육:
+      - "기관이 주최·운영하는 행사나 교육 자체가 문서의 주된 업무 대상이다"
+      - "그 행사·교육을 기획·준비하거나 완료 후 운영 내용·성과를 보고한다. 일반 사업의 부수 활동으로 행사·교육이 언급된 것만으로는 해당하지 않는다"
+  rules:
+    - "원문의 주된 업무 대상과 보고 목적이 후보의 적용 조건을 충족하는지 확인한다.
+       document_type·document_topics 값이나 제목 키워드만으로 자동 선택하지 않는다.
+       outline_reason 에 원문에서 확인한 대상·목적과 선택 이유를 적는다"
+    - "행사교육의 두 적용 조건이 모두 확인되면 일반 기획·결과 목차보다 행사교육을 우선한다.
+       행사·교육 관련 정책·계약 등의 적정성을 검토하는 문서는 행사교육으로 자동 분류하지 않는다.
+       그 밖의 후보가 겹치면 문서가 결재권자에게 전달하거나 판단을 구하는 주된 용건으로 구분한다"
+    - "요청의 outline_candidates 에서 applicability_conditions 가 명시된 후보만 적용을 판단한다.
+       조건이 null 또는 빈 목록이면 아직 미확정이므로 선택하지 않는다.
+       선택 가능한 후보가 없으면 outline_id 는 null, outline_reason 에 적용 조건 미확정을 기록한다"
+    - "required 는 필수 섹션, order 는 기준 순서이며 적용 조건이 아니다.
+       현재 문서에 빠진 섹션이 있다는 이유로 기준 목차를 바꾸거나,
+       현재 문서와 가장 비슷한 목차를 고르지 않는다"
+    - "현재 지원하지 않는 회의 자체의 계획·논의 결과 보고 등 적용할 목차가 없거나,
+       원문 정보가 부족해 후보를 구분할 수 없을 때만 outline_id 를 null 로 두고 사유를 기록한다"
+    - "outline_id 가 null 이면 STR-03·STR-04 를 실행하지 않는다. 다른 검사는 각 규칙의 조건에 따른다"
+    - "작성 목적이 기타이거나 주제가 빈 목록이라는 이유만으로 구조 검사를 제외하지 않는다"
+
+# 위치가 정해져 있지 않다. 순서 검사에서 뺀다
+unordered: [SEC_RESOURCE, SEC_ANNEX, SEC_OTHER, SEC_UNKNOWN, SEC_GROUNDS]
+# SEC_GROUNDS 는 매뉴얼 표준 목차에 슬롯이 없다. 배경 앞뒤 어디에나 온다.
+# 해당 유형의 order 에 없는 태그도 같은 이유로 순서 검사에서 뺀다.
+# 그 유형에 위치를 정해 둔 적이 없는 것과, 정해 둔 위치를 어긴 것은 다르다.
+
+# 회의보고서는 '안건'·'회의 순서'에 대응하는 태그가 없어 미지원이다.
+# 적용할 목차가 없으면 사유를 기록하고 STR-03·STR-04 를 실행하지 않는다.
+# 해당 문서가 코퍼스에 들어오면 필요한 태그와 목차를 검토한다.

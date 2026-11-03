@@ -17,4 +17,5 @@ trap cleanup EXIT
 "${compose[@]}" up -d --wait --wait-timeout 120 --no-build
 address=$("${compose[@]}" port ai 8000)
 curl --fail --silent --show-error --max-time 10 "http://$address/health" | jq -e '.status == "ok"'
-printf 'PASS: ARM64 AI startup and health response\n'
+"${compose[@]}" exec -T ai python /smoke/smoke_pdf_api.py
+printf 'PASS: ARM64 AI health and PDF API\n'
