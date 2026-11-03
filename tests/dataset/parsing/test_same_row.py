@@ -6,6 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import parser_checks as checks
+import pymupdf
 from parser_checks import requires_corpus, source_records
 
 from bareum_ai.dataset.parsing import parser as P
@@ -83,8 +84,8 @@ class RowFragmentTests(unittest.TestCase):
             def __init__(self, x, y):
                 self.x, self.y = x, y
 
-        stroke = {"type": "s", "items": [("l", Point(10, 0), Point(10, 20))]}
-        glyph = {"type": "f", "items": [("l", Point(30, 0), Point(30, 20))]}
+        stroke = {"type": "s", "rect": pymupdf.Rect(10, 0, 10, 20), "items": [("l", Point(10, 0), Point(10, 20))]}
+        glyph = {"type": "f", "rect": pymupdf.Rect(24, 0, 36, 20), "items": [("l", Point(30, 0), Point(30, 20))]}
         self.assertEqual(P.vertical_rules([stroke, glyph]), [(10, 0, 20)])
 
 

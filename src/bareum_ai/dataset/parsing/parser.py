@@ -73,6 +73,8 @@ CHAPTER_NO_RE = re.compile(r"^(\d{1,2}|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ])\.?$")
 ROW_FRAGMENT_MAX_GAP = 1.0
 ROW_LINE_HEIGHT_RATIO = 2.0
 WORD_CHAR_RE = re.compile(r"[가-힣A-Za-z]")
+UNBORDERED_MIN_WIDTH = 40.0
+UNBORDERED_MIN_RULES = 3
 CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 MULTI_SPACE_RE = re.compile(r"\s{2,}")
 LEADER_DOTS_RE = re.compile(r"[·․‧∙⋅.…]{4,}")
@@ -871,6 +873,182 @@ def split_background_grid(page, table, lines: list[Line], drawings: list[dict]) 
     return refined
 
 
+def horizontal_rules(drawings: list[dict]) -> list[tuple[float, float, float]]:
+    """가로선(x0, x1, y). 같은 높이에서 칸마다 끊어 그린 조각은 한 줄로 잇는다."""
+    pieces = []
+    for drawing in drawings:
+        if thin_bar(drawing) == "h":
+            r = drawing["rect"]
+            pieces.append((r.x0, r.x1, (r.y0 + r.y1) / 2))
+            continue
+        stroked = "s" in (drawing.get("type") or "")
+        for item in drawing["items"]:
+            if item[0] == "l" and stroked and abs(item[1].y - item[2].y) < 0.6:
+                a, b = sorted((item[1].x, item[2].x))
+                pieces.append((a, b, (item[1].y + item[2].y) / 2))
+            elif item[0] == "re" and item[1].height < 1.6 and item[1].width > item[1].height:
+                pieces.append((item[1].x0, item[1].x1, (item[1].y0 + item[1].y1) / 2))
+    rules: list[list[float]] = []
+    for x0, x1, y in sorted(pieces, key=lambda p: (round(p[2]), p[0])):
+        last = rules[-1] if rules else None
+        if last and abs(last[2] - y) < 1.0 and x0 <= last[1] + 2:
+            last[1] = max(last[1], x1)
+        else:
+            rules.append([x0, x1, y])
+    return [tuple(rule) for rule in rules if rule[1] - rule[0] > UNBORDERED_MIN_WIDTH]
+
+
+def unbordered_table_regions(
+    drawings: list[dict], tables: list
+) -> list[tuple[float, float, float, float]]:
+    """좌우 바깥선 없이 가로선과 안쪽 세로선만으로 그린 표의 영역.
+
+    같은 폭의 가로선 사이 구간을 안쪽 세로선이 이어야 표의 행으로 본다. 세로선이 없는
+    구간(표 사이의 문단, 제목 밑줄)에서 끊으므로 위아래 표를 한 표로 합치지 않는다.
+    """
+    verticals = vertical_rules(drawings)
+    groups: list[list[tuple]] = []
+    for rule in horizontal_rules(drawings):
+        for group in groups:
+            if abs(group[0][0] - rule[0]) <= 4 and abs(group[0][1] - rule[1]) <= 4:
+                group.append(rule)
+                break
+        else:
+            groups.append([rule])
+    boxes = [pymupdf.Rect(t.bbox) for t in tables]
+    regions = []
+    for group in groups:
+        x0, x1 = min(r[0] for r in group), max(r[1] for r in group)
+        ys = sorted({round(r[2], 1) for r in group})
+        runs: list[tuple[float, float]] = []
+        current: tuple[float, float] | None = None
+        for top, bottom in zip(ys, ys[1:]):
+            spanned = any(
+                x0 + 5 < x < x1 - 5 and y0 <= top + 2 and y1 >= bottom - 2
+                for x, y0, y1 in verticals
+            )
+            # 이중선 사이처럼 좁은 틈은 세로선이 없어도 같은 표로 잇는다.
+            if spanned or (current and bottom - top < 6):
+                current = (current[0] if current else top, bottom)
+            elif current:
+                runs.append(current)
+                current = None
+        if current:
+            runs.append(current)
+        for top, bottom in runs:
+            region = pymupdf.Rect(x0, top, x1, bottom)
+            # 바깥선이 있어도 괘선을 채움 다각형으로 그리면 find_tables 가 찾지 못한다.
+            # 그래서 바깥선 유무가 아니라 이미 찾은 표와 겹치는지로 거른다.
+            if sum(1 for y in ys if top <= y <= bottom) < UNBORDERED_MIN_RULES or any(
+                (region & box).get_area() > region.get_area() * 0.5 for box in boxes
+            ):
+                continue
+            regions.append((x0, top, x1, bottom))
+    return regions
+
+
+def column_lines(
+    hrules: list[tuple], vrules: list[tuple], region: tuple[float, float, float, float]
+) -> list[float]:
+    """영역 안에서 가로선 사이 한 행 구간 전체를 가로지르는 세로선의 x 위치.
+
+    짧은 글자 획은 행을 가로지르지 않으므로 세지 않는다.
+    """
+    x0, top, x1, bottom = region
+    ys = sorted({
+        round(y, 1) for a, b, y in hrules
+        if top - 2 <= y <= bottom + 2 and a <= x0 + 6 and b >= x1 - 6
+    })
+    xs = sorted({
+        round(x, 1)
+        for upper, lower in zip(ys, ys[1:]) if lower - upper >= 6
+        for x, y0, y1 in vrules
+        if x0 + 4 < x < x1 - 4 and y0 <= upper + 2 and y1 >= lower - 2
+    })
+    columns: list[float] = []
+    for x in xs:
+        if not columns or x - columns[-1] > 2:
+            columns.append(x)
+    return columns
+
+
+def table_geometry_valid(table) -> bool:
+    """셀이 겹치지 않고 병합 범위가 표 안에 있는가(파싱 API의 표 검증과 같은 기준)."""
+    row_count = len(table.rows)
+    column_count = max((len(row.cells) for row in table.rows), default=0)
+    covered: set[tuple[int, int]] = set()
+    for cell in table_cell_geometry(table):
+        for r in range(cell["row"], cell["row"] + cell["rowspan"]):
+            for c in range(cell["col"], cell["col"] + cell["colspan"]):
+                if r >= row_count or c >= column_count or (r, c) in covered:
+                    return False
+                covered.add((r, c))
+    return True
+
+
+def recover_unbordered_tables(page, drawings: list[dict], tables: list, warnings: list[dict]):
+    """바깥선 없는 표에 좌우 세로선을 더해 그 자리에서 다시 찾는다.
+
+    다시 찾은 표가 하나이고, 2행 2열 이상이며, 셀 구조가 유효하고, 영역 안 글자가 모두
+    칸에 들어갈 때만 표로 받는다. 아니면 경고만 남기고 글자는 본문 줄로 둔다.
+    """
+    recovered = set()
+    failed: list = []
+    regions = unbordered_table_regions(drawings, tables)
+    if not regions:
+        return tables, recovered
+    words = page.get_text("words")
+    hrules, vrules = horizontal_rules(drawings), vertical_rules(drawings)
+    page_box = parser_layout.page_rect(page)
+    for x0, top, x1, bottom in regions:
+        region = pymupdf.Rect(x0, top, x1, bottom)
+        if not pymupdf.Rect(page_box).contains(region):
+            continue  # 페이지 밖까지 그린 장식 도형이다
+        inside = [w for w in words if region.contains(pymupdf.Point((w[0] + w[2]) / 2, (w[1] + w[3]) / 2))]
+        columns = column_lines(hrules, vrules, (x0, top, x1, bottom))
+        if not any(
+            any(w[2] <= x + 1 for w in inside) and any(w[0] >= x - 1 for w in inside)
+            for x in columns
+        ):
+            continue  # 칸 양쪽에 글자가 없으면 표가 아니라 제목 상자·밑줄이다
+        # 채움 다각형 괘선은 find_tables 가 선으로 보지 않으므로 찾은 괘선도 함께 넘긴다.
+        extra = [((x0, top), (x0, bottom)), ((x1, top), (x1, bottom))]
+        extra += [((a, y), (b, y)) for a, b, y in hrules if top - 2 <= y <= bottom + 2 and x0 - 4 <= a and b <= x1 + 4]
+        extra += [((x, a), (x, b)) for x, a, b in vrules if x0 - 4 <= x <= x1 + 4 and top - 2 <= a and b <= bottom + 2 and b - a > 6]
+        clip = pymupdf.Rect(x0 - 4, top - 4, x1 + 4, bottom + 4)
+        found = page.find_tables(clip=clip, add_lines=extra).tables
+        table = found[0] if len(found) == 1 else None
+        accepted = (
+            table is not None
+            and len(table.rows) >= 2
+            and table_columns(table) >= 2
+            and max(abs(a - b) for a, b in zip(table.bbox, (x0, top, x1, bottom))) < 6
+            and table_geometry_valid(table)
+            # 괘선으로 확인한 열보다 적으면 칸이 합쳐진 것이다('① ② ③'이 한 칸에 든다).
+            and table_columns(table) >= len(columns) + 1
+            and all(
+                any(center_in(w[:4], cell["bbox"]) for cell in table_cell_geometry(table))
+                for w in inside
+            )
+        )
+        if accepted:
+            tables = tables + [table]
+            recovered.add(tuple(table.bbox))
+        elif inside:
+            failed.append(region)
+    for region in failed:
+        # 더 작은 영역에서 표를 복원했으면 그 자리의 경고는 남기지 않는다.
+        if any((region & pymupdf.Rect(box)).get_area() > region.get_area() * 0.5 for box in recovered):
+            continue
+        warnings.append({
+            "code": "table_unbordered_candidate",
+            "page": page.number + 1,
+            "bbox": [region.x0, region.y0, region.x1, region.y1],
+            "detail": "좌우 바깥선 없는 표로 보이지만 셀 구조를 확정하지 못해 본문 줄로 두었습니다. 표 구조 검수가 필요합니다.",
+        })
+    return tables, recovered
+
+
 def extract_tables(
     page, lines: list[Line], stats: Stats, warnings: list[dict],
     approval_regions: list[dict] | None = None,
@@ -905,6 +1083,7 @@ def extract_tables(
                     else:
                         replacements.append(table)
                 found = replacements
+        found, unbordered = recover_unbordered_tables(page, drawings, found, warnings)
     except Exception as exc:
         warnings.append(
             {
@@ -920,6 +1099,20 @@ def extract_tables(
     background_fixed = set()
     if approval_regions is None:
         approval_regions = detect_approval_regions(page, lines, warnings)
+    # 결재란은 결재란 경로가 다룬다. 결재란과 겹친 바깥선 없는 표 후보 경고는 남기지 않는다.
+    approval_boxes = [pymupdf.Rect(r["bbox"]) for r in approval_regions if r.get("kind") == "approval_grid"]
+    warnings[:] = [
+        w for w in warnings
+        if not (
+            w["code"] == "table_unbordered_candidate"
+            and w["page"] == page.number + 1
+            and any(
+                (pymupdf.Rect(w["bbox"]) & box).get_area()
+                > pymupdf.Rect(w["bbox"]).get_area() * 0.5
+                for box in approval_boxes
+            )
+        )
+    ]
 
     for table in found:
         inside = [
@@ -958,6 +1151,8 @@ def extract_tables(
             transformations.add("glyph_merged_rows_split")
         if tuple(table.bbox) in gradient_fixed:
             transformations.add("gradient_columns_removed")
+        if tuple(table.bbox) in unbordered:
+            transformations.add("unbordered_table_recovered")
 
         compact, compact_source = prune_grid(grid, source_grid)
         if not compact:
@@ -1376,10 +1571,29 @@ def text_right(line: Line) -> float:
     return line.words[-1].bbox[2] if line.words else line.bbox[2]
 
 
+def thin_bar(drawing: dict) -> str | None:
+    """채움 다각형으로 그린 괘선인가. 전체 모양이 가는 막대면 'v'(세로) 또는 'h'(가로).
+
+    글자 윤곽선도 채움 도형이지만 글자 하나의 상자는 막대 모양이 아니다.
+    """
+    if "f" not in (drawing.get("type") or "") or "s" in (drawing.get("type") or ""):
+        return None
+    r = drawing["rect"]
+    if r.width < 1.6 and r.height > 6:
+        return "v"
+    if r.height < 1.6 and r.width > UNBORDERED_MIN_WIDTH:
+        return "h"
+    return None
+
+
 def vertical_rules(drawings: list[dict]) -> list[tuple[float, float, float]]:
-    """칸을 가르는 세로선(x, y0, y1). 윤곽선으로 그린 글자 획은 채움 도형이라 넣지 않는다."""
+    """칸을 가르는 세로선(x, y0, y1). 윤곽선 글자 획은 막대 모양이 아니라 넣지 않는다."""
     rules = []
     for drawing in drawings:
+        if thin_bar(drawing) == "v":
+            r = drawing["rect"]
+            rules.append(((r.x0 + r.x1) / 2, r.y0, r.y1))
+            continue
         stroked = "s" in (drawing.get("type") or "")
         for item in drawing["items"]:
             if item[0] == "l" and stroked and abs(item[1].x - item[2].x) < 0.6:
@@ -2224,7 +2438,8 @@ def _extract_document_pages(doc, stats: Stats, warnings: list[dict]) -> Document
             if any(t.requires_vision for t in tables):
                 meta["requires_vision"] = True
             if any(
-                w["code"] == "table_geometry_ambiguous" and w["page"] == page.number + 1
+                w["code"] in ("table_geometry_ambiguous", "table_unbordered_candidate")
+                and w["page"] == page.number + 1
                 for w in warnings
             ):
                 meta["requires_vision"] = True
