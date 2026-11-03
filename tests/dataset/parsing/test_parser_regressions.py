@@ -923,6 +923,9 @@ class ContractAndIntegrationTests(unittest.TestCase):
             checks.check_sections(a, "generated", report)
             checks.check_normalization(a, "generated", report)
             checks.check_marker_roundtrip(a, "generated", report)
+            checks.check_reading_order(a, "generated", report)
+            checks.check_control_chars(a, "generated", report)
+            checks.check_mid_block_markers(a, "generated", report)
             self.assertFalse(report.violations)
 
     def test_rotated_page_keeps_body_number_near_bottom(self):

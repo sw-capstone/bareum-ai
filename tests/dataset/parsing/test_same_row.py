@@ -124,8 +124,34 @@ class SameRowSourceTests(unittest.TestCase):
                          "doc_7b05f2d19f16f02b", "doc_f302215a42767bd8"):
             with self.subTest(identity=identity):
                 report = checks.Report()
-                checks.check_reading_order(self.parse(identity), identity, report)
+                doc = self.parse(identity)
+                checks.check_reading_order(doc, identity, report)
+                checks.check_control_chars(doc, identity, report)
+                checks.check_mid_block_markers(doc, identity, report)
                 self.assertFalse(report.violations)
+
+
+class InvariantCheckTests(unittest.TestCase):
+    """#26 불변 조건 검사가 위반을 실제로 잡는가."""
+
+    def run_checks(self, block):
+        report = checks.Report()
+        doc = {"blocks": [block]}
+        checks.check_control_chars(doc, "mutation", report)
+        checks.check_mid_block_markers(doc, "mutation", report)
+        return set(report.violations)
+
+    def test_control_char_in_text_or_cell(self):
+        self.assertEqual(self.run_checks({"id": "b", "kind": "para", "text": "전년도\x01 대비"}),
+                         {"P07 제어 문자 잔존"})
+        self.assertEqual(self.run_checks({"id": "b", "kind": "table", "text": "", "rows": [["\x01"]]}),
+                         {"P07 제어 문자 잔존"})
+
+    def test_swallowed_bullet_line(self):
+        block = {"id": "b", "kind": "item", "text": "", "source_text": " ◈ 첫 항목\n ◦ 둘째 항목"}
+        self.assertEqual(self.run_checks(block), {"P08 블록 중간 글머리 기호"})
+        block["source_text"] = " ◈ 첫 항목이 길어\n- 줄바꿈된 본문"
+        self.assertEqual(self.run_checks(block), set())
 
 
 if __name__ == "__main__":
