@@ -1,6 +1,7 @@
 """#26 원본 점검에서 나온 줄 병합·항목 이름·붙임·표어·단위 표시 오류."""
 
 import unittest
+from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 
@@ -43,6 +44,65 @@ class HangingIndentTests(unittest.TestCase):
         self.assertEqual(len(P.merge_wrapped([first, rest], P.Stats(), [inline])), 1)
         between = (100, 309.5, 300, 316.0)
         self.assertEqual(len(P.merge_wrapped([first, rest], P.Stats(), [between])), 2)
+
+
+    def test_inline_figure_just_below_line_does_not_block(self):
+        # 줄 안 그림이 앞 줄 아래로 1.5pt 삐져나온다('교구' 뒤 가운뎃점 그림).
+        first = line("○ (홍보) 과학관에서 직접 기획하고 개발 제작한 전시물, 도서, 교구", 57, 697, 538, 18)
+        rest = line("등을 소개하여, 바이럴 마케팅 홍보", 85, 723, 325, 18)
+        self.assertEqual(len(P.merge_wrapped([first, rest], P.Stats(), [(352, 697, 369, 716.5)])), 1)
+
+
+class MergeBoundaryTests(unittest.TestCase):
+    def test_boxed_text_merges_on_shared_right_edge(self):
+        # 상자 안 줄은 페이지 끝(560)보다 안쪽(523.6)에서 같이 끝난다.
+        lines = [
+            line("○ 생활예술인 및 전문예술인들에게 다양한 문화예술 창출의 기회를 제공", 70, 140, 523.6, 14),
+            line("하고, 도민에게는 일상에서 다양한 문화향유의 기회를 제공", 90, 159, 420, 14),
+            line("○ 다양한 세대, 장르, 장소를 넘어 모두가 함께 평등한 기회를 제공하", 70, 178, 523.6, 14),
+            line("였으며, 이로 인해 지역예술인 육성에 기여", 90, 197, 400, 14),
+            line("○ 경기아트센터가 31개 시군에서 실시하던 본 사업을 실시함으로써 경기", 70, 216, 523.6, 14),
+            line("도 지역예술인들에게 더 나은 무대와 경험을 제공함", 90, 235, 430, 14),
+            line("□ 사업 개요는 다음과 같으며 세부 일정은 붙임과 같이 운영할 계획입니다", 60, 280, 560, 14),
+        ]
+        self.assertEqual(len(P.merge_wrapped(lines, P.Stats())), 4)
+        lines[0] = line("○ 생활예술인 및 전문예술인들에게 다양한 문화예술 창출의 기회 제공(예정)", 70, 140, 523.6, 14)
+        self.assertEqual(len(P.merge_wrapped(lines, P.Stats())), 5)
+
+    def test_box_border_is_line_end(self):
+        # 상자 테두리(x=548)가 줄 끝이다. 페이지 끝(562)까지는 한 글자 넘게 모자란다.
+        lines = [
+            line("우리구 관내『상도4동 안전한 통학로 조성사업』과 관련하여", 58.9, 163.7, 540, 15),
+            line("토지소유자에 대한 토지매도 계약 가능여부 등 협의 결과를 아래와", 43.9, 187.7, 539.9, 15),
+            line("같이 보고합니다.", 43.9, 211.7, 167.8, 15),
+            line("○ 목적 : 상도초등학교 학생들의 주 통학로로 이용되고 있는 상도동", 34, 285.4, 561.2, 15),
+        ]
+        border = [(548.5, 157, 238)]
+        self.assertEqual(len(P.merge_wrapped(lines, P.Stats())), 4)
+        self.assertEqual(len(P.merge_wrapped(lines, P.Stats(), rules=border)), 2)
+        # 좁은 표 칸 글은 칸 세로선에 닿아도 잇지 않는다.
+        cells = [line("13:00~13:05", 60, 100, 118, 15), line("13:10~13:30", 60, 120, 118, 15), lines[3]]
+        self.assertEqual(len(P.merge_wrapped(cells, P.Stats(), rules=[(120, 90, 160)])), 3)
+
+    def test_image_bullet_starts_new_item(self):
+        first = line("- 안전신문고 앱 다운로드 및 사용방법 안내로 시민 안전신고 활성화", 63.8, 261, 549.7, 15)
+        head = line("홍보 방법", 67, 291.7, 132.8, 15)
+        self.assertEqual(len(P.merge_wrapped([first, head], P.Stats(), [(41.1, 290.0, 59.6, 306.7)])), 2)
+        self.assertEqual(len(P.merge_wrapped([first, head], P.Stats())), 1)
+
+    def test_bold_signature_does_not_merge_with_date(self):
+        date = line("2018. 12. 28.", 446.8, 275, 552.8, 15)
+        sign = replace(line("성남시 수정구청장", 417.7, 299, 552.7, 15), is_bold=True)
+        self.assertEqual(len(P.merge_wrapped([date, sign], P.Stats())), 2)
+
+    def test_label_line_after_label_line_is_new_entry(self):
+        first = line("기간 : 2018. 7. 28.(토) ~ 8. 11.(토) [기간 중 13일]", 93, 382.8, 532, 15)
+        place = line("장소 : 동작 주차공원", 93, 404.2, 272.9, 15)
+        self.assertEqual(len(P.merge_wrapped([first, place], P.Stats())), 2)
+
+    def test_soft_hyphen_is_dash_marker(self):
+        block = P.classify(line("\xad 특히, 민선7기를 맞이하여 그동안 추진중인 사업을", 60, 100, 500), 50, 1)
+        self.assertEqual((block.kind, block.marker), ("item", "\xad"))
 
 
 class RowLabelTests(unittest.TestCase):
@@ -103,6 +163,31 @@ class ReviewSourceTests(unittest.TestCase):
         tables = [b for b in blocks if b["kind"] == "table" and b["page"] == 2]
         self.assertEqual(tables[0]["rows"][0][:2], ["구분", "건명"])
         self.assertTrue([b for b in blocks if b["kind"] == "para" and b["text"] == "(단위 : 원)"])
+
+    def test_marker_only_attachment_takes_title_below(self):
+        heads = [s["head_text"] for s in self.parse("doc_4dd4862e76664f75")["sections"] if s["marker"] == "붙 임 1"]
+        self.assertEqual(heads, ["2019년 산불감시원 및 산불전문진화대원 모집 공고"])
+
+    def test_boxed_summary_lines_merge(self):
+        blocks = self.parse("doc_43a0776d96eb0d2f")["blocks"]
+        self.assertTrue([b for b in blocks if b["text"].startswith("경기도 생활예술인") and b["text"].endswith("문화향유의 기회’를 제공")])
+
+    def test_boxed_intro_paragraph_merges(self):
+        blocks = self.parse("doc_c0d2268528dcf158")["blocks"]
+        self.assertTrue([b for b in blocks if b["text"].startswith("우리구 관내") and b["text"].endswith("같이 보고합니다.")])
+
+    def test_image_bullet_heading_stays_apart(self):
+        blocks = self.parse("doc_e07c4af3ba527c82")["blocks"]
+        self.assertTrue([b for b in blocks if b["text"].strip() == "홍보 방법"])
+
+    def test_image_bullet_pages_are_flagged(self):
+        doc = self.parse("doc_e07c4af3ba527c82")
+        flagged = {w["page"] for w in doc["warnings"] if w["code"] == "marker_shape_unverified"}
+        self.assertIn(7, flagged)
+        self.assertTrue(doc["pages"][6]["requires_vision"])
+        # 기관명 앞 로고는 글머리가 아니다.
+        logo = self.parse("doc_d6e3d8550b942aba")["warnings"]
+        self.assertFalse([w for w in logo if w["code"] == "marker_shape_unverified"])
 
     def test_dashed_slogan_keeps_title_intact(self):
         doc = self.parse("doc_61cecbb5ae10d34c")

@@ -77,6 +77,8 @@ SPACED_LABEL_HEAD_RE = re.compile(r"(?:^|[^가-힣])[가-힣]$")
 SPACED_LABEL_TAIL_RE = re.compile(r"^[가-힣]{1,3}\s*[:：]|^[가-힣]{1,2}$")
 UNIT_CAPTION_RE = re.compile(r"^\(?\s*단\s*위\s*[:：]")
 # 제목 위에 따로 놓는 표어('- 행정안전부 주관 -'). 앞뒤 줄과 한 문단으로 잇지 않는다.
+# '장 소 : 동작 주차공원'처럼 짧은 이름과 쌍점으로 시작하는 줄.
+LABEL_LINE_RE = re.compile(r"^[가-힣]{1,6}\s?[:：]")
 DASHED_LABEL_RE = re.compile(r"^[-‐‑–—].+[-‐‑–—]$")
 ROW_LINE_HEIGHT_RATIO = 2.0
 WORD_CHAR_RE = re.compile(r"[가-힣A-Za-z]")
@@ -96,6 +98,7 @@ ATTACHMENT_RE = re.compile(
 ORG_NAME_RE = re.compile(
     r"^[가-힣]{2,10}(시|도|군|구|청|원|과|팀|국|실|관|본부|센터|공사|공단|연구소|사업소|보건소|재단|협회)$"
 )
+PRIVATE_GLYPH_RE = re.compile(r"^\s*[\ue000-\uf8ff]")
 SYMBOL_SQUARE = "\uf000\uf06d\uf071"
 SYMBOL_CIRCLE = "\uf09e"
 MARKER_PATTERNS = [
@@ -110,7 +113,7 @@ MARKER_PATTERNS = [
     (4, "circle", re.compile(r"^([oO])\s+")),
     (4, "circle", re.compile(r"^([" + SYMBOL_CIRCLE + r"])\s*")),
     # '- 문산보건지소 -'처럼 양 끝을 대시로 감싼 표어는 글머리가 아니다(DASHED_LABEL_RE).
-    (5, "dash", re.compile(r"^([-‐‑–—])(?:\s+|(?=\D))(?!.+[-‐‑–—]\s*$)")),
+    (5, "dash", re.compile(r"^([-‐‑–—\xad])(?:\s+|(?=\D))(?!.+[-‐‑–—]\s*$)")),
     (6, "dot", re.compile(r"^([·•∙‧▪▫‣․･・])\s*(?=\S)")),
     (6, "dot", re.compile(r"^([ㆍ])\s+")),
     (None, "note", re.compile(r"^([※*✱☞])\s*")),
@@ -151,6 +154,7 @@ class Line:
     line_count: int = 1
     transformations: list[str] = field(default_factory=list)
     is_light: bool = False
+    is_bold: bool = False
 
 
 @dataclass
@@ -336,6 +340,10 @@ def build_line(raw: dict, stats: Stats) -> Line | None:
         is_light=all(
             luminance(s.get("color", 0)) > SHADOW_MAX_LUMA for s in raw["spans"]
         ),
+        # 서명란·소제목은 본문과 굵기가 달라 줄 병합을 가르는 단서가 된다.
+        is_bold=sum(
+            not ch["c"].isspace() for s in raw["spans"] if s.get("flags", 0) & 16 for ch in s["chars"]
+        ) > len(text.replace(" ", "")) / 2,
     )
 
 
@@ -1811,10 +1819,12 @@ def merge_wrapped(
     lines: list[Line],
     stats: Stats,
     barriers: list[tuple] | None = None,
+    rules: list[tuple] | None = None,
 ) -> list[Line]:
     if not lines:
         return []
     barriers = barriers or []
+    rules = rules or []
 
     ambiguous = {
         i
@@ -1827,17 +1837,34 @@ def merge_wrapped(
         )
     }
     right_edge = max(line.bbox[2] for line in lines)
+    # 상자 안 글은 페이지 끝보다 안쪽에서 꽉 찬다. 양쪽 정렬이라 꽉 찬 줄끼리 끝이 같다.
+    half_width = (right_edge - min(line.bbox[0] for line in lines)) / 2
+    wide = [line.bbox[2] for line in lines if line.bbox[2] - line.bbox[0] >= half_width]
     paragraphs: list[Line] = []
     # 문단마다 첫 줄의 글자 시작과 마지막 줄(끝 x, 글자)을 따로 둔다. 문단 bbox 는 줄을 합친
     # 범위라, 둘째 줄이 짧게 끝나도 첫 줄의 오른쪽 끝을 그대로 들고 있다.
     # 첫 줄이 '필요성 : …'처럼 이름과 값이면 값의 시작도 둔다. 다음 줄이 그 자리에 맞춰 들여쓴다.
     heads: list[tuple[float, float | None]] = []
-    tails: list[tuple[float, str]] = []
+    tails: list[Line] = []
     for i, line in enumerate(lines):
         if paragraphs:
             prev = paragraphs[-1]
-            tail_right, tail_text = tails[-1]
-            shortfall = right_edge - tail_right
+            tail = tails[-1]
+            tail_right, tail_text = tail.bbox[2], tail.text
+            # 상자 테두리(세로선)가 넓은 줄을 감싸면 그 선이 줄 끝이다. 좁은 표 칸 글은 뺀다.
+            edge = min(
+                (x for x, y0, y1 in rules
+                 if x >= tail_right - 1 and y0 <= tail.bbox[1] and y1 >= tail.bbox[3]
+                 and tail_right - tail.bbox[0] >= half_width),
+                default=right_edge,
+            )
+            shortfall = min(right_edge, edge) - tail_right
+            full = shortfall < prev.size * WRAP_MAX_SHORTFALL or (
+                tail.bbox[2] - tail.bbox[0] >= half_width
+                and sum(abs(edge - tail_right) <= 1.0 for edge in wide) >= 3
+                and not ends_sentence(tail_text)
+                and not tail_text.rstrip().endswith((")", "]", "」", "』"))
+            )
             vgap = line.bbox[1] - prev.bbox[3]
             # 줄 박스는 앞쪽 공백까지 포함해 들여쓴 줄의 시작이 실제보다 왼쪽에 잡힌다.
             # 앞 줄이 문장으로 끝나지 않았을 때만 실제 글자 시작으로 다시 비교한다.
@@ -1851,16 +1878,17 @@ def merge_wrapped(
                 )
             )
             smaller_continuation = continues_smaller_list_text(prev, line)
-            # 줄 사이에 놓인 그림·표만 막는다. 줄 안의 작은 그림은 줄 아래로 1pt 안쪽 삐져나온다.
+            # 줄 사이에 놓인 그림·표만 막는다. 줄 안의 작은 그림은 가운데가 줄 안에 있다.
             blocked = any(
                 box[1] < line.bbox[1] - 1
                 and box[3] > prev.bbox[3] + 1
+                and prev.bbox[3] - 1 <= (box[1] + box[3]) / 2 <= line.bbox[1] + 1
                 and box[0] < max(prev.bbox[2], line.bbox[2])
                 and box[2] > min(prev.bbox[0], line.bbox[0])
                 for box in barriers
-            )
+            ) or image_bullet(line, barriers)
             if (
-                shortfall < prev.size * WRAP_MAX_SHORTFALL
+                full
                 and 0 <= vgap < prev.size * WRAP_MAX_VGAP
                 and aligned
                 and (
@@ -1872,6 +1900,8 @@ def merge_wrapped(
                 and not blocked
                 and not starts_new_block(line.text)
                 and not DASHED_LABEL_RE.match(tail_text.strip())
+                and tail.is_bold == line.is_bold
+                and not (value_left is not None and LABEL_LINE_RE.match(line.text))
             ):
                 joiner = " " if prev.trailing_space or smaller_continuation else ""
                 source_offset = len(prev.source_text) + 1
@@ -1887,7 +1917,7 @@ def merge_wrapped(
                     | {"wrapped_lines_merged"}
                 )
                 stats.merged_lines += 1
-                tails[-1] = (line.bbox[2], line.text)
+                tails[-1] = line
                 continue
         paragraphs.append(
             replace(
@@ -1895,8 +1925,20 @@ def merge_wrapped(
             )
         )
         heads.append((text_left(line), label_value_left(line)))
-        tails.append((line.bbox[2], line.text))
+        tails.append(line)
     return paragraphs
+
+
+def image_bullet(line: Line, boxes: list[tuple]) -> bool:
+    """줄 첫 글자 바로 앞에 글자 크기만 한 그림이 있다. 그림 글머리로 시작하는 새 항목이다."""
+    start = text_left(line)
+    return any(
+        box[3] - box[1] <= line.size * 1.3
+        and box[2] - box[0] <= line.size * 1.3
+        and y_overlap(box, line.bbox) > 0.5
+        and start - line.size * 1.5 <= box[2] <= start + 1
+        for box in boxes
+    )
 
 
 def label_value_left(line: Line) -> float | None:
@@ -2266,11 +2308,18 @@ def build_sections(blocks: list[Block], document_id: str) -> list[Section]:
     heads = [b for b in blocks if b.id in candidates and enclosing(b) is None]
     id_of = {b.id: f"{document_id}_s{i:03d}" for i, b in enumerate(heads, start=1)}
 
+    def title_of(block: Block) -> str:
+        """'붙 임 1'처럼 표시만 있는 붙임은 아래 몇 줄 중 가장 큰 글씨를 제목으로 쓴다."""
+        if head_text(block) or block.kind != "attachment":
+            return head_text(block)
+        below = [c for c in children.get(block.id, [])[:3] if c.page == block.page and c.text]
+        return max(below, key=lambda c: c.size).text if below else ""
+
     sections = {
         b.id: Section(
             section_id=id_of[b.id],
             head_block_id=b.id,
-            head_text=head_text(b),
+            head_text=title_of(b),
             marker=b.marker,
             level=b.level,
             child_block_ids=[c.id for c in children.get(b.id, [])],
@@ -2525,6 +2574,19 @@ def _extract_document_pages(doc, stats: Stats, warnings: list[dict]) -> Document
             mark_visual_tables(page, tables, figures, warnings)
             if any(t.requires_vision for t in tables):
                 meta["requires_vision"] = True
+            # 그림·글꼴 전용 글머리는 기호 모양을 글자로 알 수 없어 층위를 추정만 한다.
+            unverified = [
+                line for line in body
+                if PRIVATE_GLYPH_RE.match(line.text) or image_bullet(line, [f.bbox for f in figures])
+            ]
+            if unverified:
+                warnings.append({
+                    "code": "marker_shape_unverified",
+                    "page": page.number + 1,
+                    "bbox": list(unverified[0].bbox),
+                    "detail": f"그림·글꼴 전용 글머리 {len(unverified)}줄의 기호 모양과 층위를 확인하지 못했습니다.",
+                })
+                meta["requires_vision"] = True
             if any(
                 w["code"] in ("table_geometry_ambiguous", "table_unbordered_candidate")
                 and w["page"] == page.number + 1
@@ -2581,6 +2643,7 @@ def _assemble_blocks(pages: DocumentPages, stats: Stats) -> list[Block]:
             ),
             stats,
             barriers,
+            pages.rules[page_index] if pages.rules else [],
         )
         page_blocks = [classify(line, body_left, page_no) for line in flow]
         page_blocks += [
