@@ -33,6 +33,12 @@ jobs:
           python-version: "3.14"
       - name: Install locked dependencies
         run: uv sync --locked
+      - name: Check secret patterns
+        if: github.event_name == 'pull_request'
+        run: uv run --no-sync python .github/scripts/check_secret_patterns.py
+      - name: Test secret pattern check
+        if: github.event_name == 'pull_request'
+        run: uv run --no-sync python -m unittest discover -s .github/tests -p 'test_*.py'
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:

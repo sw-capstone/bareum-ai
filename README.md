@@ -70,7 +70,7 @@ PyMuPDF는 PDF 파싱 API에서도 사용하는 실행 의존성으로 관리한
 
 원본 PDF가 필요한 파서 테스트는 기본으로 건너뛴다. 로컬 원본이 있으면 `BAREUM_PARSER_CORPUS=<원본 폴더> ./scripts/test-app.sh`로 함께 실행한다.
 
-PR에서는 `Bareum AI CI`가 workflow·shell 정적 검사, 앱 테스트, 이미지 빌드와 기동을 확인한다. AI 결과의 정확성·성능과 서버 연동은 아직 검사하지 않는다.
+PR에서는 `Bareum AI CI`가 workflow·shell 정적 검사, 비밀정보 의심 패턴, 앱 테스트, 이미지 빌드와 기동을 확인한다. AI 결과의 정확성·성능과 서버 연동은 아직 검사하지 않는다.
 
 ## 저장소 경계
 
