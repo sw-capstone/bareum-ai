@@ -4,18 +4,13 @@
 
 ```text
 bareum-ai/
-├── .github/                 # 협업 템플릿과 하네스 CI
+├── .github/                 # 협업 템플릿과 CI
 ├── docs/
-│   ├── architecture/        # 저장소 구조와 책임 경계
+│   ├── architecture/        # 저장소 구조
 │   ├── guide/               # AI 작업 안내
-│   ├── harness/             # 하네스 설계와 확장 기준
 │   └── specs/               # 검사 명세 안내와 RMA 카탈로그
 ├── datasets/splits/         # 원본 보고서 분할 manifest·PDF 해시
-├── harness/
-│   ├── src/project_harness/ # 저장소 정적 검사기와 CLI
-│   ├── tests/               # 검사기 자체 테스트
-│   └── reports/             # 실행 결과(Git 제외)
-├── scripts/                 # 로컬·CI 검사 진입점
+├── scripts/                 # 로컬 테스트 명령
 ├── src/bareum_ai/           # AI 실행 코드
 │   ├── dataset/             # 데이터셋 구축 도구
 │   │   ├── parsing/         # 데이터셋 구축용 PDF 파서

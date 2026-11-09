@@ -4,12 +4,11 @@
 
 ## 현재 구성
 
-AI 실행 코드 경로와 Python 개발 환경, 저장소 운영에 필요한 문서와 정적 하네스를 관리한다.
+AI 실행 코드 경로와 Python 개발 환경, 저장소 운영에 필요한 문서를 관리한다.
 
-- `.github/`: 협업 템플릿과 하네스 CI
-- `docs/`: AI 저장소 경계, 개발 안내와 하네스 문서
-- `harness/`: 저장소 정적 검사와 검사기 자체 테스트
-- `scripts/`: 로컬과 CI의 공통 검사 명령
+- `.github/`: 협업 템플릿과 CI
+- `docs/`: 저장소 구조, 작업 안내, 명세
+- `scripts/`: 로컬 테스트 명령
 - `src/bareum_ai/`: AI 실행 코드 (Python 3.14)
   - `dataset/`: 데이터셋 구축 도구
     - `parsing/`: 데이터셋 구축용 PDF 보고서 파서
@@ -66,17 +65,16 @@ PyMuPDF는 PDF 파싱 API에서도 사용하는 실행 의존성으로 관리한
 ## 현재 검사
 
 ```bash
-./scripts/run-harness.sh check
-./scripts/test-harness.sh
 ./scripts/test-app.sh          # AI 실행 코드 테스트 (pytest)
 ```
 
 원본 PDF가 필요한 파서 테스트는 기본으로 건너뛴다. 로컬 원본이 있으면 `BAREUM_PARSER_CORPUS=<원본 폴더> ./scripts/test-app.sh`로 함께 실행한다.
 
-현재 하네스는 필수 경로, JSON 문법, Markdown 내부 링크와 비밀정보 의심 패턴을 검사한다. 비밀정보 검사는 설정·소스·문서에서 `API_KEY`, `CLIENT_SECRET`, `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD` 대입값(8자 이상)과 `sk-` 뒤 20자 이상 토큰 패턴을 찾고, `replace-me`, `example` 같은 예시값은 제외한다. 모든 비밀정보를 찾아내는 검사는 아니다. AI 결과의 정확성·성능과 서버 연동은 아직 검사하지 않는다.
+PR에서는 `Bareum AI CI`가 workflow·shell 정적 검사, 앱 테스트, 이미지 빌드와 기동을 확인한다. AI 결과의 정확성·성능과 서버 연동은 아직 검사하지 않는다.
 
 ## 저장소 경계
 
+- 웹은 AI 저장소를 직접 호출하지 않는다. 서버가 AI 처리를 호출하고 공개 API 형태로 웹에 결과를 제공한다.
 - 서버↔AI 형식은 담당자가 합의한 뒤 `bareum-server/packages/contracts/`에서 관리한다.
 - AI 저장소는 합의된 계약을 소비하거나 제공하는 구현과 테스트를 담당한다.
 - 다른 저장소의 문서나 파일을 복제해 별도의 기준으로 관리하지 않는다.
@@ -87,10 +85,8 @@ PyMuPDF는 PDF 파싱 API에서도 사용하는 실행 의존성으로 관리한
 - [RMA 라벨링 파이프라인](docs/specs/rma-labeling-pipeline.md)
 - [파일럿 라벨링 안내](docs/guide/rma-pilot-labeling.md)
 - [재실행 일치도 근거](docs/specs/rma-repeatability-20261014.md)
-- [AI 개발 가이드](docs/guide/development-guide.md)
 - [저장소 구조](docs/architecture/repository-structure.md)
-- [하네스 설계 v1.4](docs/harness/harness-v1.4.md)
-- [하네스 확장 로드맵](docs/harness/harness-file-roadmap.md)
+- [검사 명세](docs/specs/README.md)
 
 ## 파싱 결과 고정
 
