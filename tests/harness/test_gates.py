@@ -17,7 +17,7 @@ from bareum_ai.harness.gates import (
 CANDIDATES = frozenset({"law1:3", "law1:5"})
 
 
-def violation(*article_ids: str) -> Judgment:
+def violation(*article_ids: str | None) -> Judgment:
     return Judgment(
         sentence_id="s1",
         verdict=VIOLATION,
@@ -37,9 +37,10 @@ def test_confidence_at_threshold_passes():
     assert check_confidence("regulation", 0.7, min_confidence=0.7) is None
 
 
-def test_confidence_missing_score_holds_regulation():
+def test_confidence_missing_score_holds_as_no_evidence():
+    # 점수가 없다는 것은 후보 조문이 검색되지 않았다는 뜻이다.
     decision = check_confidence("regulation", None, min_confidence=0.7)
-    assert decision == Decision(Outcome.HOLD, HoldReason.LOW_CONFIDENCE)
+    assert decision == Decision(Outcome.HOLD, HoldReason.NO_EVIDENCE)
 
 
 def test_confidence_ignored_for_other_tasks():
@@ -70,6 +71,11 @@ def test_article_outside_candidates_discards():
     assert decision == Decision(Outcome.DISCARD)
 
 
+def test_name_only_citation_is_not_discarded_by_existence_check():
+    # id 없이 이름만 적은 인용은 폐기가 아니라 관문 ③의 보류 대상이다.
+    assert check_article_exists(violation(None), CANDIDATES) is None
+
+
 def test_article_check_passes_when_no_evidence():
     # 근거가 없는 경우의 처리는 관문 ③ 몫이다.
     assert check_article_exists(violation(), CANDIDATES) is None
@@ -92,6 +98,11 @@ def test_violation_with_evidence_outside_candidates_is_downgraded():
     assert decision == Decision(Outcome.HOLD, HoldReason.VERIFICATION_DOWNGRADE)
 
 
+def test_violation_with_name_only_citation_is_downgraded():
+    decision = check_final(violation(None), CANDIDATES)
+    assert decision == Decision(Outcome.HOLD, HoldReason.VERIFICATION_DOWNGRADE)
+
+
 def test_non_violation_without_evidence_passes():
     j = Judgment(sentence_id="s1", verdict="정상", evidence=())
     assert check_final(j, CANDIDATES) is None
@@ -107,6 +118,17 @@ def test_all_gates_pass_exposes():
 
 def test_fake_article_is_discarded_before_final_gate():
     decision = run_gates(violation("law9:1"), CANDIDATES)
+    assert decision == Decision(Outcome.DISCARD)
+
+
+def test_name_only_citation_holds_instead_of_discarding():
+    decision = run_gates(violation(None), CANDIDATES)
+    assert decision == Decision(Outcome.HOLD, HoldReason.VERIFICATION_DOWNGRADE)
+
+
+def test_name_only_citation_does_not_hide_fake_article():
+    # 이름만 있는 인용이 섞여 있어도 후보 밖 id는 폐기한다.
+    decision = run_gates(violation(None, "law9:1"), CANDIDATES)
     assert decision == Decision(Outcome.DISCARD)
 
 

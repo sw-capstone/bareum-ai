@@ -32,7 +32,8 @@ class HoldReason(Enum):
 
 @dataclass(frozen=True)
 class Evidence:
-    article_id: str
+    # None은 id 없이 법령명·조번호 이름만 적은 인용이다.
+    article_id: str | None
 
 
 @dataclass(frozen=True)
@@ -59,10 +60,16 @@ def withheld(sentence_id: str, hold_reason: HoldReason) -> Judgment:
 def check_confidence(
     task: str, score: float | None, min_confidence: float
 ) -> Decision | None:
-    """관문 ⓪: 법령 판정에서 검색 점수가 기준보다 낮으면 호출 없이 판단보류한다."""
+    """관문 ⓪: 법령 판정에서 검색 점수가 기준보다 낮으면 호출 없이 판단보류한다.
+
+    점수가 없으면 후보 조문이 검색되지 않은 것이라 no_evidence, 점수가 기준에 못 미치면
+    low_confidence로 보류한다.
+    """
     if task != "regulation":
         return None
-    if score is None or score < min_confidence:
+    if score is None:
+        return Decision(Outcome.HOLD, HoldReason.NO_EVIDENCE)
+    if score < min_confidence:
         return Decision(Outcome.HOLD, HoldReason.LOW_CONFIDENCE)
     return None
 
@@ -70,17 +77,29 @@ def check_confidence(
 def check_article_exists(
     judgment: Judgment, candidates: Collection[str]
 ) -> Decision | None:
-    """관문 ②: 후보 목록에 없는 조문을 인용했으면 이슈를 폐기한다."""
-    if any(e.article_id not in candidates for e in judgment.evidence):
+    """관문 ②: id가 있는데 후보 목록에 없는 조문을 인용했으면 이슈를 폐기한다.
+
+    id 없이 이름만 적은 인용은 폐기하지 않고 관문 ③이 근거 없음으로 보류한다.
+    """
+    if any(
+        e.article_id is not None and e.article_id not in candidates
+        for e in judgment.evidence
+    ):
         return Decision(Outcome.DISCARD)
     return None
 
 
 def check_final(judgment: Judgment, candidates: Collection[str]) -> Decision | None:
-    """관문 ③: 위반가능인데 후보 안의 근거가 없으면 판단보류로 낮춘다."""
+    """관문 ③: 위반가능인데 후보 안의 근거가 없으면 판단보류로 낮춘다.
+
+    근거가 비었거나 id 없이 이름만 있는 인용뿐인 경우도 후보 안의 근거가 없는 것이다.
+    """
     if judgment.verdict != VIOLATION:
         return None
-    if not any(e.article_id in candidates for e in judgment.evidence):
+    if not any(
+        e.article_id is not None and e.article_id in candidates
+        for e in judgment.evidence
+    ):
         return Decision(Outcome.HOLD, HoldReason.VERIFICATION_DOWNGRADE)
     return None
 
