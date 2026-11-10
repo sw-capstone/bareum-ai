@@ -17,7 +17,7 @@ def cases(expected: str, predicted: str, n: int) -> list[Case]:
 
 @pytest.fixture
 def mixed() -> list[Case]:
-    """TP 3, FN 2, FP 3, TN 9. 정답이 보류인 문장 4개, 답할 수 있는 문장 13개."""
+    """TP 3, FN 2, FP 3. 정답이 보류인 문장 4개, 답할 수 있는 문장 13개."""
     return [
         *cases(VIOLATION, VIOLATION, 3),
         *cases(VIOLATION, COMPLIANT, 1),
@@ -53,8 +53,13 @@ def test_f1_uses_counts(mixed):
     assert compute_metrics(mixed).f1 == Ratio(6, 11)
 
 
-def test_false_positive_rate_uses_every_non_violation_as_denominator(mixed):
-    assert compute_metrics(mixed).false_positive_rate == Ratio(3, 12)
+def test_false_positive_rate_is_share_of_flagged_that_was_wrong(mixed):
+    assert compute_metrics(mixed).false_positive_rate == Ratio(3, 6)
+
+
+def test_false_positive_rate_ignores_number_of_compliant_cases(mixed):
+    padded = [*mixed, *cases(COMPLIANT, COMPLIANT, 100)]
+    assert compute_metrics(padded).false_positive_rate == Ratio(3, 6)
 
 
 def test_hold_hit_rate_is_share_of_should_hold_that_was_held(mixed):
@@ -72,7 +77,7 @@ def test_ratios_are_not_available_without_matching_cases():
     assert m.recall.value is None  # 정답이 위반인 문장이 없다
     assert m.f1.value is None
     assert m.hold_hit_rate.value is None  # 정답이 보류인 문장이 없다
-    assert m.false_positive_rate == Ratio(0, 2)
+    assert m.false_positive_rate.value is None  # 위반으로 낸 문장이 없다
     assert m.over_hold_rate == Ratio(0, 2)
 
 

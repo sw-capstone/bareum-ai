@@ -5,13 +5,12 @@
 - 정답: VIOLATION(위반), COMPLIANT(위반 아님), SHOULD_HOLD(근거가 부족해 보류해야 함)
 - 예측: VIOLATION, COMPLIANT, HOLD(판단보류)
 
-산식은 하네스 상세 11장 원문이 로컬에 없어 아래 기준으로 정했다. 오탐율의 분모와 보류율
-두 방향의 분모는 노션 원문과 대조해 확정한다.
+지표 목록은 하네스 재설계를 따른다. 재설계에 산식이 없어 아래 기준으로 정했다.
 
 - 정밀도: 위반으로 낸 문장 중 정답이 위반인 비율 (TP / (TP + FP))
 - 재현율: 정답이 위반인 문장 중 위반으로 낸 비율 (TP / (TP + FN)). 보류한 위반은 놓친 것이다.
 - F1: 2TP / (2TP + FP + FN)
-- 오탐율: 정답이 위반이 아닌 문장(COMPLIANT·SHOULD_HOLD) 중 위반으로 낸 비율 (FP / (FP + TN))
+- 오탐율: 위반으로 낸 문장 중 정답이 위반이 아닌 비율 (FP / (TP + FP)). 1 - 정밀도와 같다.
 - 보류 적중률: 정답이 SHOULD_HOLD인 문장 중 보류한 비율
 - 과잉 보류율: 답할 수 있는 문장(정답이 SHOULD_HOLD가 아닌 문장) 중 보류한 비율
 """
@@ -57,7 +56,7 @@ class Metrics:
 
 
 def compute_metrics(cases: Iterable[Case]) -> Metrics:
-    tp = fp = fn = tn = 0
+    tp = fp = fn = 0
     should_hold = should_hold_held = 0
     answerable = answerable_held = 0
 
@@ -73,7 +72,6 @@ def compute_metrics(cases: Iterable[Case]) -> Metrics:
             fn += not flagged
         else:
             fp += flagged
-            tn += not flagged
 
         held = c.predicted == HOLD
         if c.expected == SHOULD_HOLD:
@@ -87,7 +85,7 @@ def compute_metrics(cases: Iterable[Case]) -> Metrics:
         precision=Ratio(tp, tp + fp),
         recall=Ratio(tp, tp + fn),
         f1=Ratio(2 * tp, 2 * tp + fp + fn),
-        false_positive_rate=Ratio(fp, fp + tn),
+        false_positive_rate=Ratio(fp, tp + fp),
         hold_hit_rate=Ratio(should_hold_held, should_hold),
         over_hold_rate=Ratio(answerable_held, answerable),
     )
