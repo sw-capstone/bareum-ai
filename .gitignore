@@ -9,6 +9,4 @@ __pycache__/
 node_modules/
 dist/
 build/
-harness/reports/*
-!harness/reports/.gitkeep
 parsed_output/

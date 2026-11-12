@@ -1,1 +1,0 @@
-"""Minimal repository verification harness."""
