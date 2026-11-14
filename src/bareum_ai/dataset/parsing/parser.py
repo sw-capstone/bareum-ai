@@ -28,7 +28,7 @@ SCHEMA_VERSION = "1.2.0"
 
 SPACE_GAP_RATIO = 0.15
 DUP_OVERLAP_RATIO = 0.8
-WRAP_MAX_SHORTFALL = 0.6
+WRAP_MAX_SHORTFALL = 1.0
 WRAP_MAX_VGAP = 1.2
 CELL_LINEBREAK_POLICY = "preserve-boundaries-v1"
 CELL_RANGE_END_RE = re.compile(r"\d[\d\s.년월일시분초:/-]*[∼~〜]$")
@@ -68,6 +68,23 @@ PAGE_NUM_RE = re.compile(r"^[\s\-–—]*\d{1,4}\s*(?:/\s*\d{1,4})?[\s\-–—]*
 PAGE_NUM_DASHED_RE = re.compile(r"^[-–—]\s*\d{1,4}\s*[-–—]$")
 DIGITS_RE = re.compile(r"\d+")
 SECTION_NO_RE = re.compile(r"^(\d{1,2})\.?$")
+# 같은 행의 제목과 결합할 장 번호. 장식 제목 복구는 2층위로 고정하므로 SECTION_NO_RE 를 따로 둔다.
+CHAPTER_NO_RE = re.compile(r"^(\d{1,2}|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ])\.?$")
+ROW_FRAGMENT_MAX_GAP = 1.0
+# '○ 일   자 :'처럼 글자 사이를 벌린 항목 이름은 조각 간격이 3em 까지 벌어진다.
+SPACED_LABEL_MAX_GAP = 3.0
+SPACED_LABEL_HEAD_RE = re.compile(r"(?:^|[^가-힣])[가-힣]$")
+SPACED_LABEL_TAIL_RE = re.compile(r"^[가-힣]{1,3}\s*[:：]|^[가-힣]{1,2}$")
+UNIT_CAPTION_RE = re.compile(r"^\(?\s*단\s*위\s*[:：]")
+# 제목 위에 따로 놓는 표어('- 행정안전부 주관 -'). 앞뒤 줄과 한 문단으로 잇지 않는다.
+# '장 소 : 동작 주차공원'처럼 짧은 이름과 쌍점으로 시작하는 줄.
+LABEL_LINE_RE = re.compile(r"^[가-힣]{1,6}\s?[:：]")
+DASHED_LABEL_RE = re.compile(r"^[-‐‑–—].+[-‐‑–—]$")
+ROW_LINE_HEIGHT_RATIO = 2.0
+WORD_CHAR_RE = re.compile(r"[가-힣A-Za-z]")
+UNBORDERED_MIN_WIDTH = 40.0
+UNBORDERED_MIN_RULES = 3
+CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 MULTI_SPACE_RE = re.compile(r"\s{2,}")
 LEADER_DOTS_RE = re.compile(r"[·․‧∙⋅.…]{4,}")
 APPROVAL_FIELD_RE = re.compile(
@@ -81,26 +98,30 @@ ATTACHMENT_RE = re.compile(
 ORG_NAME_RE = re.compile(
     r"^[가-힣]{2,10}(시|도|군|구|청|원|과|팀|국|실|관|본부|센터|공사|공단|연구소|사업소|보건소|재단|협회)$"
 )
+PRIVATE_GLYPH_RE = re.compile(r"^\s*[\ue000-\uf8ff]")
 SYMBOL_SQUARE = "\uf000\uf06d\uf071"
 SYMBOL_CIRCLE = "\uf09e"
 MARKER_PATTERNS = [
     (1, "roman", re.compile(r"^([ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]\.?)\s*")),
-    (2, "number", re.compile(r"^(\d{1,2}\.)\s+(?!\d{1,2}\.)")),
-    (3, "square", re.compile(r"^([□■ㅁ▢▣◻◼❑❒])\s*")),
+    # '2. 14.', '2. 14(수)', '5. 30~31.' 처럼 번호 뒤에 일(日)이 오면 날짜다.
+    (2, "number", re.compile(r"^(\d{1,2}\.)\s+(?!\d{1,2}\s*[.(（~∼〜])")),
+    # 모양이 같은 변형 부호는 같은 층위로 본다. 원문 부호는 marker_raw 에 남는다.
+    (3, "square", re.compile(r"^([□■ㅁ▢▣◻◼❑❒❐❏☐∎])\s*")),
     (3, "square", re.compile(r"^([" + SYMBOL_SQUARE + r"])\s*")),
     (3, "square", re.compile(r"^([mq])\s+")),
-    (4, "circle", re.compile(r"^([ㅇ○◦●◯❍◎])\s*")),
+    (4, "circle", re.compile(r"^([ㅇ○◦●◯❍◎∘⦁])\s*")),
     (4, "circle", re.compile(r"^([oO])\s+")),
     (4, "circle", re.compile(r"^([" + SYMBOL_CIRCLE + r"])\s*")),
-    (5, "dash", re.compile(r"^([-‐‑–—])(?:\s+|(?=\D))")),
-    (6, "dot", re.compile(r"^([·•∙‧▪▫‣․])\s*(?=\S)")),
+    # '- 문산보건지소 -'처럼 양 끝을 대시로 감싼 표어는 글머리가 아니다(DASHED_LABEL_RE).
+    (5, "dash", re.compile(r"^([-‐‑–—\xad])(?:\s+|(?=\D))(?!.+[-‐‑–—]\s*$)")),
+    (6, "dot", re.compile(r"^([·•∙‧▪▫‣․･・])\s*(?=\S)")),
     (6, "dot", re.compile(r"^([ㆍ])\s+")),
     (None, "note", re.compile(r"^([※*✱☞])\s*")),
     (None, "circled", re.compile(r"^([①-⑳])\s*(?=\S)")),
     (None, "paren", re.compile(r"^(\d{1,2}\))\s*(?=\S)")),
     (None, "hangul", re.compile(r"^([가나다라마바사아자차카타파하]\.)\s+")),
     (None, "paren", re.compile(r"^(\([0-9가-힣a-zA-Z]{1,3}\))\s*(?=\S)")),
-    (None, "shape", re.compile(r"^([◆◇▶▷★☆▲△▼▽])\s*(?=\S)")),
+    (None, "shape", re.compile(r"^([◆◇◈▶▷▸▹▻►★☆▲△▼▽✓➠❙§¦])\s*(?=\S)")),
 ]
 NONSTANDARD_TYPES = ("circled", "paren", "hangul", "shape")
 SYMBOL_MARKERS = SYMBOL_SQUARE + SYMBOL_CIRCLE + "mq"
@@ -108,6 +129,7 @@ HEADING_LEVELS = (1, 2)
 MAX_SECTION_DEPTH = 16
 SECTION_HEAD_MAX_CHARS = 20
 SENTENCE_ENDING = re.compile(r"(함|음|임|됨|짐|옴|바람|할것|하였음|이다|한다|합니다)$")
+HEAD_NOTE_RE = re.compile(r"[(（][^)）]*[)）]")
 RUNNING_KINDS = ("header", "footer", "page_number")
 STACKED_KINDS = ("heading", "item", "attachment")
 EXCLUDED_KINDS = RUNNING_KINDS + ("figure", "approval", "title_fragment")
@@ -132,6 +154,7 @@ class Line:
     line_count: int = 1
     transformations: list[str] = field(default_factory=list)
     is_light: bool = False
+    is_bold: bool = False
 
 
 @dataclass
@@ -208,6 +231,7 @@ class DocumentPages:
     figures: list[list[Block]]
     heights: list[float]
     layouts: list[list[dict]] = field(default_factory=list)
+    rules: list[list[tuple]] = field(default_factory=list)
 
 
 def union(a: tuple, b: tuple) -> tuple:
@@ -259,6 +283,12 @@ def build_line(raw: dict, stats: Stats) -> Line | None:
         threshold = span["size"] * SPACE_GAP_RATIO
         for ch in span["chars"]:
             source_chars.append(ch["c"])
+            if CONTROL_CHAR_RE.fullmatch(ch["c"]):
+                # 글꼴이 공백 글리프를 제어 문자(\x01 등)로 내보낸다. 원문에는 남기고 본문은 공백으로 본다.
+                chars.append((" ", None, None))
+                source_length += len(ch["c"])
+                add_transformation(transformations, "control_chars_spaced")
+                continue
             if (
                 not ch["c"].isspace()
                 and prev is not None
@@ -310,6 +340,10 @@ def build_line(raw: dict, stats: Stats) -> Line | None:
         is_light=all(
             luminance(s.get("color", 0)) > SHADOW_MAX_LUMA for s in raw["spans"]
         ),
+        # 서명란·소제목은 본문과 굵기가 달라 줄 병합을 가르는 단서가 된다.
+        is_bold=sum(
+            not ch["c"].isspace() for s in raw["spans"] if s.get("flags", 0) & 16 for ch in s["chars"]
+        ) > len(text.replace(" ", "")) / 2,
     )
 
 
@@ -457,26 +491,61 @@ def select_words(line: Line, indices: list[int]) -> Line:
     )
 
 
-def table_cell_geometry(table) -> list[dict]:
-    """빈 슬롯은 rows에 남기고, 실제 셀의 좌표와 병합 범위를 기록한다."""
+def table_cell_geometry(table, large_first: bool = False) -> list[dict]:
+    """셀을 행·열 슬롯에 놓고 병합 범위를 기록한다. 빈 슬롯은 rows에 빈 칸으로 남는다.
+
+    병합 범위는 셀이 덮는 행·열의 시작 좌표로 센다. find_tables 는 큰 셀 안에 작은 셀을
+    겹쳐 줄 때가 있다(#29). 그러면 작은 셀이 슬롯을 먼저 갖고, 큰 셀은 남은 슬롯을
+    세로로 먼저 늘린 직사각형들로 나눈다. large_first 면 반대로 큰 셀이 먼저 갖는다.
+    """
+    n_rows, n_cols = len(table.rows), table_columns(table)
     entries = [
         (r, c, tuple(cell))
         for r, row in enumerate(table.rows)
         for c, cell in enumerate(row.cells)
         if cell is not None
     ]
-    xs = sorted({round(v, 3) for _, _, box in entries for v in (box[0], box[2])})
-    ys = sorted({round(v, 3) for _, _, box in entries for v in (box[1], box[3])})
-    return [
-        {
-            "row": r,
-            "col": c,
-            "bbox": list(box),
-            "rowspan": max(1, ys.index(round(box[3], 3)) - ys.index(round(box[1], 3))),
-            "colspan": max(1, xs.index(round(box[2], 3)) - xs.index(round(box[0], 3))),
-        }
-        for r, c, box in entries
-    ]
+    tops: dict[int, float] = {}
+    lefts: dict[int, float] = {}
+    for r, c, box in entries:
+        tops[r] = min(tops.get(r, box[1]), box[1])
+        lefts[c] = min(lefts.get(c, box[0]), box[0])
+
+    def last(start: int, end: float, starts: dict[int, float], count: int) -> int:
+        return min(count - 1, max(
+            (i for i, v in starts.items() if i >= start and v < end - 1), default=start
+        ))
+
+    spans = [(r, c, last(r, box[3], tops, n_rows), last(c, box[2], lefts, n_cols), box)
+             for r, c, box in entries]
+    claimed: set[tuple[int, int]] = set()
+    cells = []
+    spans.sort(key=lambda s: (s[2] - s[0] + 1) * (s[3] - s[1] + 1), reverse=large_first)
+    for r, c, r1, c1, box in spans:
+        free = {(i, j) for i in range(r, r1 + 1) for j in range(c, c1 + 1)} - claimed
+        while free:
+            i0, j0 = min(free)
+            i1, j1 = i0, j0
+            while (i1 + 1, j0) in free:
+                i1 += 1
+            while all((i, j1 + 1) in free for i in range(i0, i1 + 1)):
+                j1 += 1
+            part = {(i, j) for i in range(i0, i1 + 1) for j in range(j0, j1 + 1)}
+            free -= part
+            claimed |= part
+            cells.append({
+                "row": i0,
+                "col": j0,
+                "bbox": [
+                    lefts.get(j0, box[0]) if j0 > c else box[0],
+                    tops.get(i0, box[1]) if i0 > r else box[1],
+                    lefts.get(j1 + 1, box[2]) if j1 < c1 else box[2],
+                    tops.get(i1 + 1, box[3]) if i1 < r1 else box[3],
+                ],
+                "rowspan": i1 - i0 + 1,
+                "colspan": j1 - j0 + 1,
+            })
+    return sorted(cells, key=lambda cell: (cell["row"], cell["col"]))
 
 
 def prune_grid(
@@ -513,14 +582,19 @@ def approval_hits(text: str) -> int:
 def heading_from_grid(
     grid: list[list[str]], larger_than_body: bool = False
 ) -> tuple[int, str, str] | None:
-    """도형 안 장 제목이 1행 2칸 표로 잡힌 것을 되살린다. ['Ⅰ', '사업개요'] → 1층위.
+    """도형 안 장 제목이 표로 잡힌 것을 되살린다. ['Ⅰ', '사업개요'] → 1층위.
 
+    비어 있지 않은 칸이 번호와 그 오른쪽 제목, 둘뿐인 표를 본다. 제목 밑줄 때문에
+    [['Ⅲ', ''], ['', '평가개요']]처럼 두 행으로 잡힌 상자도 여기에 든다.
     숫자 칸은 ['1', '홍길동'] 같은 데이터 표에도 흔하므로, 글자가 본문보다 클 때만
     제목으로 본다.
     """
-    if len(grid) != 1 or len(grid[0]) != 2:
+    filled = [
+        (c, cell.strip()) for row in grid for c, cell in enumerate(row) if cell.strip()
+    ]
+    if len(filled) != 2 or filled[0][0] >= filled[1][0]:
         return None
-    head, body = grid[0][0].strip(), grid[0][1].strip()
+    head, body = filled[0][1], filled[1][1]
     m = TITLE_CELL_MARKER_RE.match(head)
     if not m or not (2 <= len(body) <= 30):
         return None
@@ -528,6 +602,23 @@ def heading_from_grid(
     if level == 2 and not larger_than_body:
         return None
     return level, head, body
+
+
+def chapter_number_box(grid: list[list[str]], box: tuple, outside: list[Line]) -> bool:
+    """로마 숫자 한 칸뿐인 표 오른쪽, 같은 행에 짧은 제목 줄이 있는가.
+
+    장 번호 상자만 표로 잡히고 제목은 표 밖에 남는 경우다(['Ⅲ', ''] 표).
+    """
+    filled = [cell.strip() for row in grid for cell in row if cell.strip()]
+    if len(filled) != 1 or not re.fullmatch(r"[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]\.?", filled[0]):
+        return False
+    return any(
+        y_overlap(box, line.bbox) > ROW_OVERLAP_RATIO
+        and 0 <= text_left(line) - box[2] <= line.size * 4
+        and len(line.text) <= 30
+        and WORD_CHAR_RE.search(line.text)
+        for line in outside
+    )
 
 
 def table_heading_hint(grid: list[list[str]], larger_than_body: bool) -> dict:
@@ -541,7 +632,11 @@ def table_heading_hint(grid: list[list[str]], larger_than_body: bool) -> dict:
         r"(?:개요|배경|목적|계획|현황|내용|결과|일정|방법|방향|예산|대상|절차|범위|필요성|문제점|성과|경과)$",
         label,
     )) and not SENTENCE_ENDING.search(label)
-    confirmed = label_evidence and (level == 1 or larger_than_body)
+    # 로마 번호와 큰 글씨는 표제어 없이도 장 제목 근거로 충분하다. 표제어 사전은 sections.yaml 이
+    # 맡으므로 파서는 그 목록에 기대지 않는다. 숫자 번호는 데이터 표와 헷갈려 표제어도 요구한다.
+    confirmed = (level == 1 and (larger_than_body or label_evidence)) or (
+        label_evidence and larger_than_body
+    )
     return {"status": "confirmed" if confirmed else "needs_review",
             "level": level, "marker": marker, "text": text,
             "evidence": [e for e, found in (("section_label", label_evidence),
@@ -589,38 +684,29 @@ def _assign_table_words(
 
 def _build_table_grid(
     table,
+    geometry: list[dict],
     assignments: dict[tuple[int, int], dict[int, list[int]]],
     remaining: dict[int, Line],
     stats: Stats,
 ) -> tuple[list[list[str]], list[list[str]], set[str], dict]:
+    n_rows, n_cols = len(table.rows), table_columns(table)
+    grid = [[""] * n_cols for _ in range(n_rows)]
+    source_grid = [[""] * n_cols for _ in range(n_rows)]
     line_breaks = {}
-    grid: list[list[str]] = []
-    source_grid: list[list[str]] = []
     transformations = {"table_cells_mapped"}
-    for ri, row in enumerate(table.rows):
-        cells: list[str] = []
-        source_cells: list[str] = []
-        for ci, cell in enumerate(row.cells):
-            if cell is None:
-                cells.append("")
-                source_cells.append("")
-                continue
-            fragments: list[Line] = []
-            for i, indices in assignments.get((ri, ci), {}).items():
-                fragment = select_words(remaining[i], indices)
-                fragments.append(fragment)
-                transformations.update(fragment.transformations)
-            fragments.sort(key=lambda entry: (round(entry.bbox[1], 1), entry.bbox[0]))
-            decisions = []
-            text, source = cell_text(fragments, stats, decisions)
-            if decisions:
-                line_breaks[(ri, ci)] = decisions
-                transformations.add("cell_linebreaks_recorded")
-            cells.append(text)
-            source_cells.append(source)
-        grid.append(cells)
-        source_grid.append(source_cells)
-
+    for cell in geometry:
+        ri, ci = cell["row"], cell["col"]
+        fragments: list[Line] = []
+        for i, indices in assignments.get((ri, ci), {}).items():
+            fragment = select_words(remaining[i], indices)
+            fragments.append(fragment)
+            transformations.update(fragment.transformations)
+        fragments = [entry for row in rows_of(fragments) for entry in row]
+        decisions = []
+        grid[ri][ci], source_grid[ri][ci] = cell_text(fragments, stats, decisions)
+        if decisions:
+            line_breaks[(ri, ci)] = decisions
+            transformations.add("cell_linebreaks_recorded")
     return grid, source_grid, transformations, line_breaks
 
 
@@ -829,6 +915,202 @@ def split_background_grid(page, table, lines: list[Line], drawings: list[dict]) 
     return refined
 
 
+def horizontal_rules(drawings: list[dict]) -> list[tuple[float, float, float]]:
+    """가로선(x0, x1, y). 같은 높이에서 칸마다 끊어 그린 조각은 한 줄로 잇는다."""
+    pieces = []
+    for drawing in drawings:
+        if thin_bar(drawing) == "h":
+            r = drawing["rect"]
+            pieces.append((r.x0, r.x1, (r.y0 + r.y1) / 2))
+            continue
+        stroked = "s" in (drawing.get("type") or "")
+        for item in drawing["items"]:
+            if item[0] == "l" and stroked and abs(item[1].y - item[2].y) < 0.6:
+                a, b = sorted((item[1].x, item[2].x))
+                pieces.append((a, b, (item[1].y + item[2].y) / 2))
+    rules: list[list[float]] = []
+    for x0, x1, y in sorted(pieces, key=lambda p: (round(p[2]), p[0])):
+        last = rules[-1] if rules else None
+        if last and abs(last[2] - y) < 1.0 and x0 <= last[1] + 2:
+            last[1] = max(last[1], x1)
+        else:
+            rules.append([x0, x1, y])
+    return [tuple(rule) for rule in rules if rule[1] - rule[0] > UNBORDERED_MIN_WIDTH]
+
+
+def unbordered_table_regions(
+    drawings: list[dict], tables: list
+) -> list[tuple[float, float, float, float]]:
+    """좌우 바깥선 없이 가로선과 안쪽 세로선만으로 그린 표의 영역.
+
+    같은 폭의 가로선 사이 구간을 안쪽 세로선이 이어야 표의 행으로 본다. 세로선이 없는
+    구간(표 사이의 문단, 제목 밑줄)에서 끊으므로 위아래 표를 한 표로 합치지 않는다.
+    """
+    verticals = vertical_rules(drawings)
+    groups: list[list[tuple]] = []
+    for rule in horizontal_rules(drawings):
+        for group in groups:
+            if abs(group[0][0] - rule[0]) <= 4 and abs(group[0][1] - rule[1]) <= 4:
+                group.append(rule)
+                break
+        else:
+            groups.append([rule])
+    boxes = [pymupdf.Rect(t.bbox) for t in tables]
+    regions = []
+    for group in groups:
+        x0, x1 = min(r[0] for r in group), max(r[1] for r in group)
+        ys = sorted({round(r[2], 1) for r in group})
+        runs: list[tuple[float, float]] = []
+        current: tuple[float, float] | None = None
+        for top, bottom in zip(ys, ys[1:]):
+            spanned = any(
+                x0 + 5 < x < x1 - 5 and y0 <= top + 2 and y1 >= bottom - 2
+                for x, y0, y1 in verticals
+            )
+            # 이중선 사이처럼 좁은 틈은 세로선이 없어도 같은 표로 잇는다.
+            if spanned or (current and bottom - top < 6):
+                current = (current[0] if current else top, bottom)
+            elif current:
+                runs.append(current)
+                current = None
+        if current:
+            runs.append(current)
+        for top, bottom in runs:
+            region = pymupdf.Rect(x0, top, x1, bottom)
+            # 바깥선이 있어도 괘선을 채움 다각형으로 그리면 find_tables 가 찾지 못한다.
+            # 그래서 바깥선 유무가 아니라 이미 찾은 표와 겹치는지로 거른다.
+            if sum(1 for y in ys if top <= y <= bottom) < UNBORDERED_MIN_RULES or any(
+                (region & box).get_area() > region.get_area() * 0.5 for box in boxes
+            ):
+                continue
+            regions.append((x0, top, x1, bottom))
+    return regions
+
+
+def column_lines(
+    hrules: list[tuple], vrules: list[tuple], region: tuple[float, float, float, float]
+) -> list[float]:
+    """영역 안에서 가로선 사이 한 행 구간 전체를 가로지르는 세로선의 x 위치.
+
+    짧은 글자 획은 행을 가로지르지 않으므로 세지 않는다.
+    """
+    x0, top, x1, bottom = region
+    ys = sorted({
+        round(y, 1) for a, b, y in hrules
+        if top - 2 <= y <= bottom + 2 and a <= x0 + 6 and b >= x1 - 6
+    })
+    xs = sorted({
+        round(x, 1)
+        for upper, lower in zip(ys, ys[1:]) if lower - upper >= 6
+        for x, y0, y1 in vrules
+        if x0 + 4 < x < x1 - 4 and y0 <= upper + 2 and y1 >= lower - 2
+    })
+    columns: list[float] = []
+    for x in xs:
+        if not columns or x - columns[-1] > 2:
+            columns.append(x)
+    return columns
+
+
+def find_tables_on_rules(page, segments: list, words: list, clip) -> list:
+    """괘선과 글자 자리만 옮긴 빈 페이지에서 표를 찾는다.
+
+    채움 도형이 많은 페이지에서는 같은 괘선을 넘겨도 find_tables 가 표를 놓친다. 칸 글자는
+    나중에 원래 줄에서 배정하므로 여기서는 셀 좌표만 얻으면 된다. 글자가 없는 표는
+    find_tables 가 버리므로 각 어절 자리에 작은 표시 글자를 둔다.
+    """
+    with pymupdf.open() as doc:
+        scratch = doc.new_page(width=page.rect.width, height=page.rect.height)
+        for a, b in segments:
+            scratch.draw_line(a, b, width=0.5)
+        for w in words:
+            scratch.insert_text(((w[0] + w[2]) / 2 - 1, (w[1] + w[3]) / 2 + 1), "x", fontsize=3)
+        return scratch.find_tables(clip=clip).tables
+
+
+def recover_unbordered_tables(page, drawings: list[dict], tables: list, warnings: list[dict]):
+    """바깥선 없는 표에 좌우 세로선을 더해 그 자리에서 다시 찾는다.
+
+    다시 찾은 표가 하나이고, 2행 2열 이상이며, 영역 안 글자가 모두 칸에 들어갈 때만
+    표로 받는다. 아니면 경고만 남기고 글자는 본문 줄로 둔다.
+    """
+    recovered = set()
+    regions = unbordered_table_regions(drawings, tables)
+    if not regions:
+        return tables, recovered
+    words = page.get_text("words")
+    hrules, vrules = horizontal_rules(drawings), vertical_rules(drawings)
+    page_box = parser_layout.page_rect(page)
+    for x0, top, x1, bottom in regions:
+        region = pymupdf.Rect(x0, top, x1, bottom)
+        if not pymupdf.Rect(page_box).contains(region):
+            continue  # 페이지 밖까지 그린 장식 도형이다
+        inside = [w for w in words if region.contains(pymupdf.Point((w[0] + w[2]) / 2, (w[1] + w[3]) / 2))]
+        columns = column_lines(hrules, vrules, (x0, top, x1, bottom))
+        if not any(
+            any(w[2] <= x + 1 for w in inside) and any(w[0] >= x - 1 for w in inside)
+            for x in columns
+        ):
+            continue  # 칸 양쪽에 글자가 없으면 표가 아니라 제목 상자·밑줄이다
+        # 채움 다각형 괘선은 find_tables 가 선으로 보지 않으므로 찾은 괘선도 함께 넘긴다.
+        extra = [((x0, top), (x0, bottom)), ((x1, top), (x1, bottom))]
+        extra += [((a, y), (b, y)) for a, b, y in hrules if top - 2 <= y <= bottom + 2 and x0 - 4 <= a and b <= x1 + 4]
+        extra += [((x, a), (x, b)) for x, a, b in vrules if x0 - 4 <= x <= x1 + 4 and top - 2 <= a and b <= bottom + 2 and b - a > 6]
+        clip = pymupdf.Rect(x0 - 4, top - 4, x1 + 4, bottom + 4)
+
+        def acceptable(found):
+            table = found[0] if len(found) == 1 else None
+            return table if (
+                table is not None
+                and len(table.rows) >= 2
+                and table_columns(table) >= 2
+                and max(abs(a - b) for a, b in zip(table.bbox, (x0, top, x1, bottom))) < 6
+                # 괘선으로 확인한 열보다 적으면 칸이 합쳐진 것이다('① ② ③'이 한 칸에 든다).
+                and table_columns(table) >= len(columns) + 1
+                and all(
+                    any(center_in(w[:4], cell["bbox"]) for cell in table_cell_geometry(table))
+                    for w in inside
+                )
+            ) else None
+
+        table = acceptable(page.find_tables(clip=clip, add_lines=extra).tables)
+        if table is None and page.rotation == 0:
+            table = acceptable(find_tables_on_rules(page, extra, inside, clip))
+        if table is not None:
+            # 바깥선 없는 표의 가운데 칸만 따로 잡힌 조각 표는 복원한 표로 대체한다.
+            outer = pymupdf.Rect(table.bbox) + (-2, -2, 2, 2)
+            tables = [t for t in tables if not outer.contains(pymupdf.Rect(t.bbox))] + [table]
+            recovered.add(tuple(table.bbox))
+        else:
+            warnings.append({
+                "code": "table_unbordered_candidate",
+                "page": page.number + 1,
+                "bbox": [x0, top, x1, bottom],
+                "detail": "좌우 바깥선 없는 표로 보이지만 셀 구조를 확정하지 못해 본문 줄로 두었습니다. 표 구조 검수가 필요합니다.",
+            })
+    return tables, recovered
+
+
+def drop_unit_caption_rows(tables: list, lines: list[Line]) -> dict[tuple, tuple]:
+    """표 바깥 위의 '(단위 : 원)' 줄만 담은 첫 행을 표에서 뺀다. 그 줄은 본문으로 남는다.
+
+    find_tables 의 표는 셀 목록에서 행과 bbox 를 계산하므로 셀만 걸러 낸다.
+    바뀐 표의 bbox 를 {이전: 이후}로 돌려준다.
+    """
+    moved = {}
+    for table in tables:
+        rows = table.rows
+        if len(rows) < 2 or getattr(table, "_bbox", None) is not None:
+            continue
+        top = getattr(rows[0], "bbox", None)
+        inside = [line for line in lines if top and any(center_in(w.bbox, top) for w in line.words)]
+        if inside and all(UNIT_CAPTION_RE.match(line.text) for line in inside):
+            old = tuple(table.bbox)
+            table.cells = [c for c in table.cells if c[1] >= rows[1].bbox[1] - 0.5]
+            moved[old] = tuple(table.bbox)
+    return moved
+
+
 def extract_tables(
     page, lines: list[Line], stats: Stats, warnings: list[dict],
     approval_regions: list[dict] | None = None,
@@ -863,6 +1145,11 @@ def extract_tables(
                     else:
                         replacements.append(table)
                 found = replacements
+        found, unbordered = recover_unbordered_tables(page, drawings, found, warnings)
+        for old, new in drop_unit_caption_rows(found, lines).items():
+            for keys in (gradient_fixed, glyph_fixed, recovered, unbordered):
+                if old in keys:
+                    keys.add(new)
     except Exception as exc:
         warnings.append(
             {
@@ -888,13 +1175,18 @@ def extract_tables(
         if not inside:
             continue
 
-        geometry = table_cell_geometry(table)
-        assignments, placed_words = _assign_table_words(geometry, remaining, inside)
-        partial = [
-            i
-            for i, placed in placed_words.items()
-            if placed and len(placed) < len(remaining[i].words)
-        ]
+        # 겹친 셀을 나누는 두 방식 중 원문 줄을 덜 가르는 쪽을 쓴다(같으면 작은 셀 우선).
+        choices = []
+        for large_first in (False, True):
+            geometry = table_cell_geometry(table, large_first)
+            assignments, placed_words = _assign_table_words(geometry, remaining, inside)
+            partial = [
+                i
+                for i, placed in placed_words.items()
+                if placed and len(placed) < len(remaining[i].words)
+            ]
+            choices.append((len(partial), large_first, geometry, assignments, placed_words, partial))
+        _, _, geometry, assignments, placed_words, partial = min(choices, key=lambda c: c[:2])
         cuts_approval = partial and approval_candidate_contains(table.bbox, approval_regions)
         if len(partial) >= 3 or cuts_approval:
             warnings.append(
@@ -908,7 +1200,7 @@ def extract_tables(
             )
             continue
         grid, source_grid, transformations, line_breaks = _build_table_grid(
-            table, assignments, remaining, stats
+            table, geometry, assignments, remaining, stats
         )
         if tuple(table.bbox) in recovered:
             transformations.add("dashed_table_boundaries_recovered")
@@ -916,6 +1208,8 @@ def extract_tables(
             transformations.add("glyph_merged_rows_split")
         if tuple(table.bbox) in gradient_fixed:
             transformations.add("gradient_columns_removed")
+        if tuple(table.bbox) in unbordered:
+            transformations.add("unbordered_table_recovered")
 
         compact, compact_source = prune_grid(grid, source_grid)
         if not compact:
@@ -961,6 +1255,10 @@ def extract_tables(
                 )
             )
         ):
+            continue
+
+        if chapter_number_box(compact, table.bbox, [remaining[i] for i in remaining if i not in inside]):
+            # 번호 칸만 감싼 상자다. 표로 만들지 않고 줄로 남겨 같은 행 제목과 결합한다.
             continue
 
         size = max((remaining[i].size for i in inside), default=0.0)
@@ -1019,7 +1317,8 @@ def extract_tables(
                 heading_hint=hint,
                 level=hint["level"] if hint.get("status") == "confirmed" else None,
                 marker=hint["marker"] if hint.get("status") == "confirmed" else None,
-                marker_raw=compact_source[0][0].strip() if hint.get("status") == "confirmed" else None,
+                marker_raw=next(c for row in compact_source for c in row if c.strip()).strip()
+                if hint.get("status") == "confirmed" else None,
                 marker_normalized=hint["marker"].rstrip(".") + "." if hint.get("status") == "confirmed" else None,
                 marker_type=("roman" if hint["level"] == 1 else "number") if hint.get("status") == "confirmed" else None,
                 transformations=sorted(transformations),
@@ -1305,41 +1604,151 @@ def shift_words(words: list[Word], offset: int) -> list[Word]:
     ]
 
 
-def group_rows(lines: list[Line], stats: Stats) -> list[Line]:
-    """같은 높이에 나란히 놓인 조각을 x 순서로 되돌리고, 제목 조각은 합친다."""
-    rows: list[list[Line]] = []
-    for line in lines:
+def rows_of(items: list) -> list[list]:
+    """같은 높이에 나란히 놓인 항목을 행으로 묶는다. 행은 위에서 아래로, 행 안은 x 순서다.
+
+    y0 를 반올림한 값으로 정렬하면 0.1pt 만 높은 오른쪽 조각이 왼쪽 조각보다 앞선다.
+    """
+    rows: list[list] = []
+    for item in sorted(items, key=lambda entry: (entry.bbox[1], entry.bbox[0])):
         for row in rows:
-            if y_overlap(row[0].bbox, line.bbox) > ROW_OVERLAP_RATIO:
-                row.append(line)
+            if y_overlap(row[0].bbox, item.bbox) > ROW_OVERLAP_RATIO:
+                row.append(item)
                 break
         else:
-            rows.append([line])
-
-    out: list[Line] = []
+            rows.append([item])
     for row in rows:
         row.sort(key=lambda entry: entry.bbox[0])
+    rows.sort(key=lambda row: (min(entry.bbox[1] for entry in row), row[0].bbox[0]))
+    return rows
 
-        section_no = SECTION_NO_RE.match(row[0].text) if len(row) >= 2 else None
+
+def text_right(line: Line) -> float:
+    """뒤따르는 공백을 뺀 실제 글자 끝 x."""
+    return line.words[-1].bbox[2] if line.words else line.bbox[2]
+
+
+def thin_bar(drawing: dict) -> str | None:
+    """채움 다각형으로 그린 괘선인가. 전체 모양이 가는 막대면 'v'(세로) 또는 'h'(가로).
+
+    글자 윤곽선도 채움 도형이지만 글자 하나의 상자는 막대 모양이 아니다. 그라데이션 배경을
+    가는 띠로 잘라 칠한 것은 막대 모양이지만 색이 연하므로 넣지 않는다.
+    """
+    if "f" not in (drawing.get("type") or "") or "s" in (drawing.get("type") or ""):
+        return None
+    fill = drawing.get("fill") or (0, 0, 0)
+    if len(fill) == 3 and 0.299 * fill[0] + 0.587 * fill[1] + 0.114 * fill[2] >= 0.7:
+        return None
+    r = drawing["rect"]
+    if r.width < 1.6 and r.height > 6:
+        return "v"
+    if r.height < 1.6 and r.width > UNBORDERED_MIN_WIDTH:
+        return "h"
+    return None
+
+
+def vertical_rules(drawings: list[dict]) -> list[tuple[float, float, float]]:
+    """칸을 가르는 세로선(x, y0, y1). 윤곽선 글자 획은 막대 모양이 아니라 넣지 않는다."""
+    rules = []
+    for drawing in drawings:
+        if thin_bar(drawing) == "v":
+            r = drawing["rect"]
+            rules.append(((r.x0 + r.x1) / 2, r.y0, r.y1))
+            continue
+        stroked = "s" in (drawing.get("type") or "")
+        for item in drawing["items"]:
+            if item[0] == "l" and stroked and abs(item[1].x - item[2].x) < 0.6:
+                rules.append(
+                    (item[1].x, min(item[1].y, item[2].y), max(item[1].y, item[2].y))
+                )
+    return rules
+
+
+def join_row_fragments(
+    row: list[Line], stats: Stats, rules: list[tuple] | None = None
+) -> list[Line]:
+    """양쪽 정렬로 어절마다 끊겨 나온 한 줄을 다시 잇는다.
+
+    표 칸 잔해나 도식 라벨을 잇지 않도록, 글자 크기·아래 경계가 같고 간격이 1em 이하이며
+    두 조각 모두 글자를 포함할 때만 잇는다. 사이를 세로선이 가로지르면 다른 칸이라 잇지 않는다.
+    상자가 맞닿은 조각('｢' + '책을', '4‧' + '9호선')과 글머리 기호만 떨어진 조각('‧')은
+    앞 조각에 글자가 없어도 잇는다. 글자 사이를 벌린 항목 이름('○ 일' + '자 :')은 3em 까지 잇는다.
+    """
+    rules = rules or []
+    out = [row[0]]
+    for line in row[1:]:
+        prev = out[-1]
+        size = max(prev.size, line.size)
+        left, right = text_right(prev), text_left(line)
+        gap = right - left
+        top, bottom = max(prev.bbox[1], line.bbox[1]), min(prev.bbox[3], line.bbox[3])
+        divided = any(
+            left - 0.5 <= x <= right + 0.5 and y0 <= top + 1 and y1 >= bottom - 1
+            for x, y0, y1 in rules
+        )
+        spaced_label = bool(
+            SPACED_LABEL_HEAD_RE.search(prev.text) and SPACED_LABEL_TAIL_RE.match(line.text)
+        )
+        # 글꼴이 바뀌는 자리('국‧' + '소‧')에서는 조각 상자가 0.1pt 남짓 겹친다.
+        if (
+            -1.0 <= gap <= size * (SPACED_LABEL_MAX_GAP if spaced_label else ROW_FRAGMENT_MAX_GAP)
+            and not divided
+            and abs(prev.size - line.size) <= size * 0.15
+            and abs(prev.bbox[3] - line.bbox[3]) <= 1.0
+            and WORD_CHAR_RE.search(line.text)
+            and (
+                WORD_CHAR_RE.search(prev.text)
+                or gap <= 0.5
+                or (len(prev.text.strip()) == 1 and starts_new_block(f"{prev.text.strip()} {line.text}"))
+            )
+        ):
+            joiner = " " if gap > line.size * SPACE_GAP_RATIO and not spaced_label else ""
+            out[-1] = join_lines([prev, line], joiner, "row_fragments_joined", stats)
+        else:
+            out.append(line)
+    return out
+
+
+def group_rows(
+    lines: list[Line], stats: Stats, rules: list[tuple] | None = None
+) -> list[Line]:
+    """같은 높이에 나란히 놓인 조각을 x 순서로 되돌리고, 제목 조각은 합친다."""
+    out: list[Line] = []
+    for row in rows_of(lines):
         nearby = all(
             b.bbox[0] - a.bbox[2] <= max(a.size, b.size) * 1.5
             for a, b in zip(row, row[1:])
         )
         if len(row) > 1 and nearby and all(len(entry.text) == 1 for entry in row):
             out.append(join_lines(row, "", "visual_row_joined", stats))
-        elif (
-            section_no
+            continue
+        chapter_no = CHAPTER_NO_RE.match(row[0].text) if len(row) >= 2 else None
+        if (
+            chapter_no
             and len(row[1].text) > 1
+            and WORD_CHAR_RE.search(row[1].text)
             and row[1].bbox[0] - row[0].bbox[2] <= max(row[0].size, row[1].size) * 4
         ):
-            number = replace(row[0], text=f"{section_no.group(1)}.")
-            out.append(
-                join_lines([number, row[1]], " ", "section_number_joined", stats)
+            # 아라비아 숫자는 번호 패턴('1. ')에 맞게 온점을 붙인다. 로마 숫자는 원문 그대로 둔다.
+            number = (
+                replace(row[0], text=f"{chapter_no.group(1)}.")
+                if chapter_no.group(1).isdigit()
+                else row[0]
             )
-            out.extend(row[2:])
-        else:
-            out.extend(row)
-    out.sort(key=lambda entry: (round(entry.bbox[1], 1), entry.bbox[0]))
+            row = [
+                join_lines([number, row[1]], " ", "section_number_joined", stats),
+                *row[2:],
+            ]
+        attachment = ATTACHMENT_RE.match(row[0].text.strip()) if len(row) >= 2 else None
+        if (
+            attachment
+            and attachment.end() == len(row[0].text.strip())
+            and re.search(r"[가-힣A-Za-z\d]", row[1].text)
+            and row[1].bbox[0] - row[0].bbox[2] <= max(row[0].size, row[1].size) * 4
+        ):
+            # '붙임 2' 상자와 같은 행의 붙임 제목을 잇는다. 따로 두면 제목 없는 붙임 구간이 된다.
+            row = [join_lines(row[:2], " ", "attachment_label_joined", stats), *row[2:]]
+        out.extend(join_row_fragments(row, stats, rules))
     return out
 
 
@@ -1380,7 +1789,7 @@ def join_vertical_runs(lines: list[Line], stats: Stats) -> list[Line]:
 
 
 def starts_new_block(text: str) -> bool:
-    return bool(ATTACHMENT_RE.match(text)) or any(
+    return bool(ATTACHMENT_RE.match(text) or DASHED_LABEL_RE.match(text.strip())) or any(
         pattern.match(text) for _, _, pattern in MARKER_PATTERNS
     )
 
@@ -1410,10 +1819,12 @@ def merge_wrapped(
     lines: list[Line],
     stats: Stats,
     barriers: list[tuple] | None = None,
+    rules: list[tuple] | None = None,
 ) -> list[Line]:
     if not lines:
         return []
     barriers = barriers or []
+    rules = rules or []
 
     ambiguous = {
         i
@@ -1426,24 +1837,60 @@ def merge_wrapped(
         )
     }
     right_edge = max(line.bbox[2] for line in lines)
+    # 상자 안 글은 페이지 끝보다 안쪽에서 꽉 찬다. 양쪽 정렬이라 꽉 찬 줄끼리 끝이 같다.
+    half_width = (right_edge - min(line.bbox[0] for line in lines)) / 2
+    wide = [line.bbox[2] for line in lines if line.bbox[2] - line.bbox[0] >= half_width]
     paragraphs: list[Line] = []
+    # 문단마다 첫 줄의 글자 시작과 마지막 줄(끝 x, 글자)을 따로 둔다. 문단 bbox 는 줄을 합친
+    # 범위라, 둘째 줄이 짧게 끝나도 첫 줄의 오른쪽 끝을 그대로 들고 있다.
+    # 첫 줄이 '필요성 : …'처럼 이름과 값이면 값의 시작도 둔다. 다음 줄이 그 자리에 맞춰 들여쓴다.
+    heads: list[tuple[float, float | None]] = []
+    tails: list[Line] = []
     for i, line in enumerate(lines):
         if paragraphs:
             prev = paragraphs[-1]
-            shortfall = right_edge - prev.bbox[2]
+            tail = tails[-1]
+            tail_right, tail_text = tail.bbox[2], tail.text
+            # 상자 테두리(세로선)가 넓은 줄을 감싸면 그 선이 줄 끝이다. 좁은 표 칸 글은 뺀다.
+            edge = min(
+                (x for x, y0, y1 in rules
+                 if x >= tail_right - 1 and y0 <= tail.bbox[1] and y1 >= tail.bbox[3]
+                 and tail_right - tail.bbox[0] >= half_width),
+                default=right_edge,
+            )
+            shortfall = min(right_edge, edge) - tail_right
+            full = shortfall < prev.size * WRAP_MAX_SHORTFALL or (
+                tail.bbox[2] - tail.bbox[0] >= half_width
+                and sum(abs(edge - tail_right) <= 1.0 for edge in wide) >= 3
+                and not ends_sentence(tail_text)
+                and not tail_text.rstrip().endswith((")", "]", "」", "』"))
+            )
             vgap = line.bbox[1] - prev.bbox[3]
+            # 줄 박스는 앞쪽 공백까지 포함해 들여쓴 줄의 시작이 실제보다 왼쪽에 잡힌다.
+            # 앞 줄이 문장으로 끝나지 않았을 때만 실제 글자 시작으로 다시 비교한다.
+            head_left, value_left = heads[-1]
+            start = max(text_left(line), line.bbox[0])
+            aligned = abs(line.bbox[0] - prev.bbox[0]) <= prev.size * 2 or (
+                not ends_sentence(tail_text)
+                and (
+                    abs(start - head_left) <= prev.size * 2
+                    or (value_left is not None and abs(start - value_left) <= prev.size)
+                )
+            )
             smaller_continuation = continues_smaller_list_text(prev, line)
+            # 줄 사이에 놓인 그림·표만 막는다. 줄 안의 작은 그림은 가운데가 줄 안에 있다.
             blocked = any(
-                box[1] < line.bbox[1]
-                and box[3] > prev.bbox[3]
+                box[1] < line.bbox[1] - 1
+                and box[3] > prev.bbox[3] + 1
+                and prev.bbox[3] - 1 <= (box[1] + box[3]) / 2 <= line.bbox[1] + 1
                 and box[0] < max(prev.bbox[2], line.bbox[2])
                 and box[2] > min(prev.bbox[0], line.bbox[0])
                 for box in barriers
-            )
+            ) or image_bullet(line, barriers)
             if (
-                shortfall < prev.size * WRAP_MAX_SHORTFALL
+                full
                 and 0 <= vgap < prev.size * WRAP_MAX_VGAP
-                and abs(line.bbox[0] - prev.bbox[0]) <= prev.size * 2
+                and aligned
                 and (
                     abs(line.size - prev.size) <= prev.size * 0.15
                     or smaller_continuation
@@ -1452,6 +1899,9 @@ def merge_wrapped(
                 and i - 1 not in ambiguous
                 and not blocked
                 and not starts_new_block(line.text)
+                and not DASHED_LABEL_RE.match(tail_text.strip())
+                and tail.is_bold == line.is_bold
+                and not (value_left is not None and LABEL_LINE_RE.match(line.text))
             ):
                 joiner = " " if prev.trailing_space or smaller_continuation else ""
                 source_offset = len(prev.source_text) + 1
@@ -1467,13 +1917,42 @@ def merge_wrapped(
                     | {"wrapped_lines_merged"}
                 )
                 stats.merged_lines += 1
+                tails[-1] = line
                 continue
         paragraphs.append(
             replace(
                 line, words=list(line.words), transformations=list(line.transformations)
             )
         )
+        heads.append((text_left(line), label_value_left(line)))
+        tails.append(line)
     return paragraphs
+
+
+def image_bullet(line: Line, boxes: list[tuple]) -> bool:
+    """줄 첫 글자 바로 앞에 글자 크기만 한 그림이 있다. 그림 글머리로 시작하는 새 항목이다."""
+    start = text_left(line)
+    return any(
+        box[3] - box[1] <= line.size * 1.3
+        and box[2] - box[0] <= line.size * 1.3
+        and y_overlap(box, line.bbox) > 0.5
+        and start - line.size * 1.5 <= box[2] <= start + 1
+        for box in boxes
+    )
+
+
+def label_value_left(line: Line) -> float | None:
+    """'필요성 : 고질적인…'의 값('고질적인')이 시작하는 x. 이름 뒤 쌍점이 앞쪽 다섯 어절 안에 있어야 한다."""
+    for word, following in zip(line.words[:5], line.words[1:6]):
+        if word.text.endswith((":", "：")):
+            return following.bbox[0]
+    return None
+
+
+def ends_sentence(text: str) -> bool:
+    """줄이 문장 끝(온점, '-다', '-함' 같은 개조식 종결)으로 끝나는가."""
+    text = text.rstrip()
+    return text.endswith((".", "다")) or bool(SENTENCE_ENDING.search(text))
 
 
 def collapse_spaced(text: str) -> tuple[str, bool]:
@@ -1793,10 +2272,16 @@ def build_sections(blocks: list[Block], document_id: str) -> list[Section]:
     def looks_like_head(block: Block) -> bool:
         if block.kind == "attachment":
             return True
-        text = re.sub(r"\s+", "", head_text(block))
-        if not text or len(text) > SECTION_HEAD_MAX_CHARS:
+        text = head_text(block)
+        if block.level == 1 and block.marker_type == "roman":
+            # 로마 숫자 장 제목은 괄호 설명을 빼고 잰다('운영 상 문제점 (운영체계 개선배경)').
+            # 다른 항목까지 빼면 '소요예산: …(금…원)' 같은 값 항목이 장이 된다.
+            text = HEAD_NOTE_RE.sub("", text)
+        text = re.sub(r"\s+", "", text)
+        # '• • •' 같은 장식 줄은 글자가 없어 구간 이름이 되지 못한다.
+        if not WORD_CHAR_RE.search(text) or len(text) > SECTION_HEAD_MAX_CHARS:
             return False
-        return not SENTENCE_ENDING.search(text)
+        return text.endswith("붙임") or not SENTENCE_ENDING.search(text)
 
     index = {b.id: b for b in blocks}
     candidates = {
@@ -1823,11 +2308,18 @@ def build_sections(blocks: list[Block], document_id: str) -> list[Section]:
     heads = [b for b in blocks if b.id in candidates and enclosing(b) is None]
     id_of = {b.id: f"{document_id}_s{i:03d}" for i, b in enumerate(heads, start=1)}
 
+    def title_of(block: Block) -> str:
+        """'붙 임 1'처럼 표시만 있는 붙임은 아래 몇 줄 중 가장 큰 글씨를 제목으로 쓴다."""
+        if head_text(block) or block.kind != "attachment":
+            return head_text(block)
+        below = [c for c in children.get(block.id, [])[:3] if c.page == block.page and c.text]
+        return max(below, key=lambda c: c.size).text if below else ""
+
     sections = {
         b.id: Section(
             section_id=id_of[b.id],
             head_block_id=b.id,
-            head_text=head_text(b),
+            head_text=title_of(b),
             marker=b.marker,
             level=b.level,
             child_block_ids=[c.id for c in children.get(b.id, [])],
@@ -1880,6 +2372,7 @@ def mark_document_title(blocks: list[Block], page_height: float) -> None:
         and TITLE_MIN_CHARS <= len(b.text) <= TITLE_MAX_CHARS
         and b.size >= floor
         and not ORG_NAME_RE.fullmatch(re.sub(r"\s+", "", b.text))
+        and not DASHED_LABEL_RE.match(b.text.strip())
     ]
     if not candidates:
         return
@@ -1922,6 +2415,24 @@ def mark_document_title(blocks: list[Block], page_height: float) -> None:
         other.kind = "title_fragment"
         other.excluded_from_retrieval = True
         break
+
+    # 윤곽선·그림자로 겹쳐 찍힌 제목은 어긋난 조각('2021년', '년 언론수용자' …)으로도 추출된다.
+    title_chars = set(re.sub(r"\s+", "", title.text))
+    for other in blocks:
+        chars = set(re.sub(r"\s+", "", other.text))
+        if (
+            other is not title
+            and other.kind == "para"
+            and other.page == title.page
+            and chars
+            and chars <= title_chars
+            and y_overlap(title.bbox, other.bbox) > ROW_OVERLAP_RATIO
+            and title.bbox[0] - 2 <= other.bbox[0]
+            and other.bbox[2] <= title.bbox[2] + 2
+        ):
+            other.kind = "title_fragment"
+            other.excluded_from_retrieval = True
+            add_transformation(other.transformations, "overlapping_title_copy")
 
 
 def recover_decorative_headings(
@@ -2012,6 +2523,7 @@ def _extract_document_pages(doc, stats: Stats, warnings: list[dict]) -> Document
     page_lines: list[list[Line]] = []
     page_tables: list[list[Block]] = []
     page_figures: list[list[Block]] = []
+    page_rules: list[list[tuple]] = []
     heights: list[float] = []
     layouts: list[list[dict]] = []
 
@@ -2062,8 +2574,22 @@ def _extract_document_pages(doc, stats: Stats, warnings: list[dict]) -> Document
             mark_visual_tables(page, tables, figures, warnings)
             if any(t.requires_vision for t in tables):
                 meta["requires_vision"] = True
+            # 그림·글꼴 전용 글머리는 기호 모양을 글자로 알 수 없어 층위를 추정만 한다.
+            unverified = [
+                line for line in body
+                if PRIVATE_GLYPH_RE.match(line.text) or image_bullet(line, [f.bbox for f in figures])
+            ]
+            if unverified:
+                warnings.append({
+                    "code": "marker_shape_unverified",
+                    "page": page.number + 1,
+                    "bbox": list(unverified[0].bbox),
+                    "detail": f"그림·글꼴 전용 글머리 {len(unverified)}줄의 기호 모양과 층위를 확인하지 못했습니다.",
+                })
+                meta["requires_vision"] = True
             if any(
-                w["code"] == "table_geometry_ambiguous" and w["page"] == page.number + 1
+                w["code"] in ("table_geometry_ambiguous", "table_unbordered_candidate")
+                and w["page"] == page.number + 1
                 for w in warnings
             ):
                 meta["requires_vision"] = True
@@ -2085,13 +2611,15 @@ def _extract_document_pages(doc, stats: Stats, warnings: list[dict]) -> Document
             page_lines.append(body)
             page_tables.append(tables)
             page_figures.append(figures)
+            page_rules.append(vertical_rules(page.get_drawings()))
             if not body and not tables:
                 warnings.append({"page": page.number + 1, **diagnose_empty_page(page)})
     finally:
         doc.close()
 
     return DocumentPages(
-        pages_meta, raw_pages, page_lines, page_tables, page_figures, heights, layouts
+        pages_meta, raw_pages, page_lines, page_tables, page_figures, heights, layouts,
+        page_rules,
     )
 
 
@@ -2109,7 +2637,13 @@ def _assemble_blocks(pages: DocumentPages, stats: Stats) -> list[Block]:
         ]
         barriers.extend(lines[i].bbox for (p, i) in tagged if p == page_index)
         flow = merge_wrapped(
-            join_vertical_runs(group_rows(body, stats), stats), stats, barriers
+            join_vertical_runs(
+                group_rows(body, stats, pages.rules[page_index] if pages.rules else []),
+                stats,
+            ),
+            stats,
+            barriers,
+            pages.rules[page_index] if pages.rules else [],
         )
         page_blocks = [classify(line, body_left, page_no) for line in flow]
         page_blocks += [
@@ -2119,10 +2653,37 @@ def _assemble_blocks(pages: DocumentPages, stats: Stats) -> list[Block]:
         ]
         page_blocks += pages.tables[page_index]
         page_blocks += pages.figures[page_index]
-        page_blocks.sort(key=lambda b: (round(b.bbox[1], 1), b.bbox[0], b.kind))
-        blocks.extend(page_blocks)
+        blocks.extend(reading_order(page_blocks))
 
     return blocks
+
+
+def reading_order(blocks: list[Block]) -> list[Block]:
+    """블록을 위에서 아래로 놓고, 같은 행에 나란한 한 줄 높이 블록은 x 순서로 둔다.
+
+    여러 줄 문단·그림처럼 키가 큰 블록은 행으로 묶지 않는다. 묶으면 옆에 놓인 여러 행이
+    한 행으로 합쳐져 순서가 크게 바뀐다.
+    """
+    def line_high(block: Block) -> bool:
+        return bool(block.size) and (
+            block.bbox[3] - block.bbox[1] <= block.size * ROW_LINE_HEIGHT_RATIO
+        )
+
+    ordered = sorted(blocks, key=lambda b: (round(b.bbox[1], 1), b.bbox[0], b.kind))
+    out: list[Block] = []
+    i = 0
+    while i < len(ordered):
+        row = [ordered[i]]
+        if line_high(ordered[i]):
+            while (
+                i + len(row) < len(ordered)
+                and line_high(ordered[i + len(row)])
+                and y_overlap(row[0].bbox, ordered[i + len(row)].bbox) > ROW_OVERLAP_RATIO
+            ):
+                row.append(ordered[i + len(row)])
+        out.extend(sorted(row, key=lambda b: (b.bbox[0], b.kind)))
+        i += len(row)
+    return out
 
 
 def recover_approval_blocks(
@@ -2190,9 +2751,10 @@ def recover_approval_blocks(
             member_ids = {id(b) for b in members}
             blocks = [b for b in blocks if id(b) not in member_ids] + [replacement]
             region["status"] = "geometry_recovered"
-    return sorted(
-        blocks, key=lambda b: (b.page, round(b.bbox[1], 1), b.bbox[0], b.kind)
-    )
+    by_page: dict[int, list[Block]] = {}
+    for block in blocks:
+        by_page.setdefault(block.page, []).append(block)
+    return [block for page in sorted(by_page) for block in reading_order(by_page[page])]
 
 
 def implementation_hashes() -> dict[str, str]:
