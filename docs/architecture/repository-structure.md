@@ -15,11 +15,13 @@ bareum-ai/
 │   ├── dataset/             # 데이터셋 구축 도구
 │   │   ├── parsing/         # 데이터셋 구축용 PDF 파서
 │   │   └── rma/             # RMA 일괄 실행·파일럿·라벨링 화면·재실행 비교
+│   ├── harness/             # 평가 분할 manifest 무결성 검사
 │   ├── rma/                 # RMA Move–Step 라벨링(대상 선정·요청·검증·조립·프롬프트)
 │   ├── sections/            # 섹션 태그 부여
 │   └── specs/               # 검사 규칙·섹션 태그·Move 라벨 명세(yaml)
 ├── tests/                   # AI 실행 코드 테스트 (pytest)
 │   ├── dataset/parsing/
+│   ├── harness/
 │   ├── rma/
 │   ├── sections/
 │   └── specs/               # 명세 파일 간 참조·불변식 검사
