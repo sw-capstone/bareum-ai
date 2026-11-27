@@ -241,6 +241,53 @@ def check_normalization(doc, name, rep):
             )
 
 
+FLOW_KINDS = {"para", "item", "heading", "note", "attachment"}
+ARROW_ONLY = re.compile(r"^[\s→⇨⇒➡➠▶▷⇩↓]*$")
+
+
+def check_reading_order(doc, name, rep):
+    """같은 줄에 나란한 두 블록이 오른쪽 것부터 나오지 않는가. 도식 안 배치는 보지 않는다."""
+    blocks = doc.get("blocks", [])
+    for a, b in zip(blocks, blocks[1:]):
+        if (
+            a.get("page") != b.get("page")
+            or a.get("kind") not in FLOW_KINDS
+            or b.get("kind") not in FLOW_KINDS
+            or a.get("layout_node_id")
+            or b.get("layout_node_id")
+            or ARROW_ONLY.match(a.get("text") or "")
+            or ARROW_ONLY.match(b.get("text") or "")
+        ):
+            continue
+        (ax0, ay0, _, ay1), (_, by0, bx1, by1) = a["bbox"], b["bbox"]
+        if abs(ay0 - by0) < 1 and abs(ay1 - by1) < 2 and bx1 <= ax0 + 1:
+            rep.fail("P06 같은 줄 블록 역순", name, f"{a.get('id')} → {b.get('id')}")
+
+
+CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# 줄 머리에만 오는 기호 글머리. 줄바꿈된 본문이 '-'·'·'·숫자로 시작할 수 있어 그것들은 보지 않는다.
+BULLET_SYMBOLS = set("□■❑❒▢❐❏☐∎○◦◯❍◎∘⦁●◆◇◈▶▷▸▹▻►★✓➠❙")
+
+
+def check_control_chars(doc, name, rep):
+    """정규화한 본문과 표 칸에 제어 문자가 남지 않았는가. 원문(source_text)은 보지 않는다."""
+    for b in doc.get("blocks", []):
+        texts = [b.get("text") or ""] + [c for row in b.get("rows") or [] for c in row]
+        if any(CONTROL_CHARS.search(t) for t in texts):
+            rep.fail("P07 제어 문자 잔존", name, f"{b.get('id')}: {(b.get('text') or '')[:28]!r}")
+
+
+def check_mid_block_markers(doc, name, rep):
+    """병합된 블록의 둘째 줄 이후가 글머리 기호로 시작하지 않는가(새 항목을 삼키지 않았는가)."""
+    for b in doc.get("blocks", []):
+        if b.get("kind") not in FLOW_KINDS:
+            continue
+        for line in (b.get("source_text") or "").split("\n")[1:]:
+            if line.lstrip()[:1] in BULLET_SYMBOLS:
+                rep.fail("P08 블록 중간 글머리 기호", name, f"{b.get('id')}: {line.strip()[:28]!r}")
+                break
+
+
 def check_marker_roundtrip(doc, name, rep):
     """marker + text 로 원문을 되짚을 수 있는가."""
     for b in doc.get("blocks", []):

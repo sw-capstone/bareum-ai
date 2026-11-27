@@ -12,6 +12,7 @@ import parser_checks as checks
 import pymupdf
 
 from bareum_ai.dataset.parsing import parser as P
+from bareum_ai.pdf_parsing.parser.table_validation import validate_table
 
 
 def line(text, box=(10, 10, 90, 20), trailing=False, size=10):
@@ -404,6 +405,32 @@ class TableRegressionTests(unittest.TestCase):
         self.assertEqual(blocks[0].rows, [["A", "", ""], ["", "", ""]])
         self.assertEqual(blocks[0].cells[0]["colspan"], 2)
         self.assertEqual(blocks[0].cells[0]["bbox"], [0, 0, 60, 30])
+
+    def test_nested_cells_split_enclosing_cell(self):
+        # #29: find_tables 가 '통계목' 큰 셀(3행×2열) 안에 '세부' 칸 두 개를 겹쳐 준다.
+        rows = [
+            [(0, 0, 60, 30), None, (60, 0, 90, 30)],
+            [(0, 30, 60, 60), (30, 30, 60, 40), (60, 30, 90, 40)],
+            [None, (30, 40, 60, 50), (60, 40, 90, 50)],
+            [None, None, (60, 50, 90, 60)],
+        ]
+        page = TablePage(rows, (0, 0, 90, 60))
+        texts = [line("구분", (5, 5, 25, 15)), line("통계목", (5, 40, 25, 50)),
+                 line("소계", (35, 31, 55, 39)), line("세부1", (35, 41, 55, 49))]
+        blocks, _ = P.extract_tables(page, texts, P.Stats(), [])
+        cells = {(c["row"], c["col"]): (c["rowspan"], c["colspan"]) for c in blocks[0].cells}
+        self.assertEqual((cells[(1, 0)], cells[(1, 1)]), ((3, 1), (1, 1)))
+        self.assertEqual([r[:2] for r in blocks[0].rows], [["구분", ""], ["통계목", "소계"], ["", "세부1"], ["", ""]])
+        validate_table(P.block_to_dict(blocks[0]))
+
+    def test_span_counts_row_slots_not_every_cell_edge(self):
+        # 같은 행의 다른 셀이 중간에 경계를 하나 더 가져도 병합 범위가 표 밖으로 나가지 않는다.
+        rows = [
+            [(0, 0, 50, 20), (50, 0, 100, 12)],
+            [(0, 20, 50, 40), (50, 12, 100, 40)],
+        ]
+        cells = P.table_cell_geometry(TablePage(rows).table)
+        self.assertTrue(all(c["row"] + c["rowspan"] <= 2 for c in cells))
 
     def test_heading_recovery_retains_marker(self):
         page = TablePage([[(0, 0, 30, 50), (30, 0, 100, 50)]])
@@ -923,6 +950,9 @@ class ContractAndIntegrationTests(unittest.TestCase):
             checks.check_sections(a, "generated", report)
             checks.check_normalization(a, "generated", report)
             checks.check_marker_roundtrip(a, "generated", report)
+            checks.check_reading_order(a, "generated", report)
+            checks.check_control_chars(a, "generated", report)
+            checks.check_mid_block_markers(a, "generated", report)
             self.assertFalse(report.violations)
 
     def test_rotated_page_keeps_body_number_near_bottom(self):
