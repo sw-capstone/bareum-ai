@@ -68,29 +68,36 @@ def evaluate(
                                      **human_agreement(pilot.units, left, right, moves)}
     reviews = _reviews(evidence_reviews)
     used: set[tuple[str, str]] = set()
+    unverified: set[tuple[str, str]] = set()
     if gold_name:
         gold = load_gold(ws, pilot, gold_name)
         runs = [load_run(ws, pilot, path) for path in run_paths]
+        scorable_run_ids = {run.manifest.run_id for run in runs if not run.incompatibilities}
         scores: list[Report] = []
         results: list[Report] = []
         for run in runs:
             run_id = run.manifest.run_id
+            run_reviews = reviews.get(run_id, {})
             result: Report = {"manifest": run.manifest.model_dump(mode="json"),
                               "incompatibilities": list(run.incompatibilities), "scores": None}
             if not run.incompatibilities:
                 scores_for_run = score(pilot, gold, run.labels, moves, steps)
-                evidence, matched = evaluate_evidence(pilot, run.labels, reviews.get(run_id, {}))
+                evidence, matched = evaluate_evidence(pilot, run.labels, run_reviews)
                 used.update((run_id, key) for key in matched)
                 scores_for_run["evidence"] = evidence
                 result["scores"] = scores_for_run
                 scores.append(scores_for_run)
+            elif run_reviews and run_id not in scorable_run_ids:
+                result["unverified_evidence_review_ids"] = sorted(run_reviews)
+                unverified.update((run_id, key) for key in run_reviews)
             results.append(result)
         report["gold_annotator"] = gold_name
         report["runs"] = results
         repeated = repeatability(pilot, gold, runs, {move for move, _ in steps})
         report["summary"] = summarize(scores) if repeated["comparable"] else None
         report["repeatability"] = repeated
-    unknown = {(run_id, key) for run_id, entries in reviews.items() for key in entries} - used
+    submitted = {(run_id, key) for run_id, entries in reviews.items() for key in entries}
+    unknown = submitted - used - unverified
     if unknown:
         run_id, key = min(unknown)
         raise InputError(f"보고서에 없는 실행 또는 근거 검수 ID: {run_id}/{key}")

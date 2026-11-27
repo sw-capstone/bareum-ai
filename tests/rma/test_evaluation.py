@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 
 from bareum_ai.dataset.rma import review, run
-from bareum_ai.dataset.rma.evaluation.__main__ import evaluate
+from bareum_ai.dataset.rma.evaluation.__main__ import evaluate, main
 from bareum_ai.dataset.rma.evaluation.models import (
-    Annotation, DocumentFields, EvidenceReview, Judgment, Labels, Pilot, Report, SpecItem, Unit, UnitKey,
+    Annotation, DocumentFields, EvidenceReview, InputError, Judgment, Labels, Pilot, Report, SpecItem, Unit, UnitKey,
 )
 from bareum_ai.dataset.rma.evaluation.scoring import score
 from bareum_ai.rma.labelers import ReplayLabeler
@@ -202,6 +202,46 @@ def test_manual_evidence_review_is_independent_of_position_validity(workspace: r
     assert evidence["position_validity"]["matched"] == evidence["position_validity"]["total"] - 1
     assert evidence["manual_validity"] == {"matched": 0, "total": 1, "rate": 0}
     assert evidence["manual_undetermined"] == 1
+
+
+def test_cli_reports_evidence_reviews_as_unverified_for_incompatible_run(workspace: review.Workspace) -> None:
+    scored, excluded = (_model_run(workspace, name) for name in ("scored", "excluded"))
+    manifest_path = excluded / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["documents"][0]["parsed_sha256"] = "different"
+    manifest_path.write_text(json.dumps(manifest))
+    evidence_id = "doc_t/blocks/b3/annotations/a1/evidence_span"
+    review_path = workspace.work / "evidence-reviews.json"
+    review_path.write_text(json.dumps([
+        EvidenceReview(run_id=root.name, evidence_id=evidence_id, verdict="valid", reason="원문 일치").model_dump()
+        for root in (scored, excluded)
+    ]))
+    out = workspace.work.parent / "evaluation.json"
+
+    exit_code = main([
+        "--work", str(workspace.work), "--gold", "adjudicated", "--run", str(scored), "--run", str(excluded),
+        "--evidence-reviews", str(review_path), "--out", str(out),
+    ])
+
+    assert exit_code == 0
+    scored_result, excluded_result = json.loads(out.read_text())["runs"]
+    assert scored_result["scores"]["evidence"]["manual_validity"] == {"matched": 1, "total": 1, "rate": 1}
+    assert excluded_result["scores"] is None
+    assert excluded_result["incompatibilities"] == ["parsed_input_mismatch:doc_t"]
+    assert excluded_result["unverified_evidence_review_ids"] == [evidence_id]
+
+
+@pytest.mark.parametrize("field", ["run_id", "evidence_id"])
+def test_evidence_reviews_reject_unknown_ids(workspace: review.Workspace, field: str) -> None:
+    root = _model_run(workspace, "scored")
+    review_path = workspace.work / "evidence-reviews.json"
+    entry = {"run_id": root.name, "evidence_id": "doc_t/blocks/b3/annotations/a1/evidence_span",
+             "verdict": "valid", "reason": "원문 일치"}
+    entry[field] = "unknown"
+    review_path.write_text(json.dumps([entry]))
+
+    with pytest.raises(InputError, match=f"{entry['run_id']}/{entry['evidence_id']}"):
+        evaluate(workspace.work, gold_name="adjudicated", run_paths=(root,), evidence_reviews=review_path)
 
 
 def test_spec_matches_each_gold_item_once_with_unicode_and_whitespace_normalized() -> None:
