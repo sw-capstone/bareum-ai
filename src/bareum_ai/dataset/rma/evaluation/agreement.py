@@ -60,11 +60,18 @@ def human_agreement(units: Sequence[Unit], left: Labels, right: Labels, moves: S
 
 
 def _conditions(runs: Sequence[Run], pilot: Pilot) -> list[str]:
+    manifests = [run.manifest for run in runs]
+    reasons: list[str] = []
+    for manifest in manifests:
+        missing_fields = [
+            field for field in ("chunk_limit", "full_text_limit") if manifest.policy.get(field) is None
+        ]
+        if missing_fields:
+            reasons.append(f"{manifest.run_id}:missing_policy_fields:{','.join(missing_fields)}")
     if len(runs) != 3:
-        return ["requires_three_runs"]
-    manifests = [r.manifest for r in runs]
+        return ["requires_three_runs", *reasons]
     first = manifests[0]
-    reasons = [f"{r.manifest.run_id}:{reason}" for r in runs for reason in r.incompatibilities]
+    reasons.extend(f"{r.manifest.run_id}:{reason}" for r in runs for reason in r.incompatibilities)
     if len({m.run_id for m in manifests}) != 3:
         reasons.append("requires_distinct_runs")
     if any(m.status != "completed" for m in manifests):

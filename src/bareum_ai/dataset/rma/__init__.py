@@ -16,6 +16,7 @@ import urllib.error
 
 from bareum_ai.rma import prompt as P
 from bareum_ai.rma import request as R
+from bareum_ai.rma import targets as T
 from bareum_ai.rma.runner import CONTEXT_MISSING_RATIO, MAX_RETRIES, label_document
 from bareum_ai.dataset.parsing import snapshot
 
@@ -65,7 +66,12 @@ def run(paths: list[Path], labeler, out_dir: Path) -> dict:
         "labeler": labeler_meta,
         "prompt_sha256": P.prompt_sha256(),
         "specs": R.spec_hashes(),
-        "policy": {"max_retries": MAX_RETRIES, "context_missing_ratio": CONTEXT_MISSING_RATIO},
+        "policy": {
+            "max_retries": MAX_RETRIES,
+            "context_missing_ratio": CONTEXT_MISSING_RATIO,
+            "chunk_limit": T.CHUNK_LIMIT,
+            "full_text_limit": R.FULL_TEXT_LIMIT,
+        },
         "documents": [],
     }
     manifest["status"] = "running"
