@@ -223,6 +223,31 @@ def test_spec_matches_each_gold_item_once_with_unicode_and_whitespace_normalized
     }
 
 
+@pytest.mark.parametrize(("gold_field", "prediction_field"), [("사업기간", None), (None, "사업기간")])
+def test_spec_counts_mapping_mismatch_when_raw_label_and_value_match(
+    gold_field: str | None, prediction_field: str | None,
+) -> None:
+    key = UnitKey("doc", "block")
+    documents = {"doc": DocumentFields(document_type=None, document_topics=None, outline_id=None)}
+    label, value = "사업기간", "2026년 3~8월"
+    annotation = Annotation.model_validate(ann("a1", "SPEC", value))
+    gold_item = SpecItem(spec_field=gold_field, raw_label=label, value=value)
+    predicted_item = SpecItem(spec_field=prediction_field, raw_label=label, value=value)
+    gold_annotation = annotation.model_copy(update={"spec_items": [gold_item]})
+    predicted_annotation = annotation.model_copy(update={"spec_items": [predicted_item]})
+    gold = Labels({key: Judgment("ok", (gold_annotation,))}, documents)
+    predictions = Labels({key: Judgment("ok", (predicted_annotation,))}, documents)
+    pilot = Pilot((Unit(key, "block", f"{label} {value}"),), {"doc": "hash"}, {}, {})
+
+    report = score(pilot, gold, predictions, ["SPEC"], [])
+
+    assert report["overall"]["spec"] == {
+        "matched": 0, "missing": 1, "added": 1, "support": 1,
+        "precision": 0.0, "recall": 0.0, "f1": 0.0,
+    }
+    assert [case["errors"] for case in report["error_cases"]] == [["spec"]]
+
+
 def test_partial_gold_steps_are_kept_separately_from_full_step_scoring() -> None:
     document = DocumentFields(document_type=None, document_topics=None, outline_id=None)
     partial_key = UnitKey("doc", "partial")

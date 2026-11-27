@@ -87,10 +87,14 @@ def _normalized(value: str) -> str:
     return " ".join(normalize("NFC", value).split())
 
 
-def _spec_items(judgment: Judgment) -> Counter[Pair]:
-    return Counter((_normalized(item.spec_field if item.spec_field is not None else item.raw_label),
-                    _normalized(item.value))
-                   for annotation in judgment.annotations for item in annotation.spec_items)
+def _spec_items(judgment: Judgment) -> Counter[tuple[bool, str, str]]:
+    return Counter(
+        (item.spec_field is not None,
+         _normalized(item.spec_field if item.spec_field is not None else item.raw_label),
+         _normalized(item.value))
+        for annotation in judgment.annotations
+        for item in annotation.spec_items
+    )
 
 
 def _spec_score(samples: Sequence[Sample]) -> Report:
